@@ -26,9 +26,9 @@ class UserNotFoundException(AuthException):
         )
 
 class InvalidTokenException(AuthException):
-    def __init__(self):
+    def __init__(self, message: str = "Token inválido"):
         super().__init__(
-            detail="Token inválido",
+            detail=message,
             status_code=status.HTTP_401_UNAUTHORIZED
         )
 
@@ -42,6 +42,20 @@ class TokenExpiredException(AuthException):
 class PasswordHistoryException(AuthException):
     def __init__(self):
         super().__init__(
-            detail="Esta contraseña ya ha sido utilizada anteriormente",
+            detail="La nueva contraseña no puede ser igual a contraseñas utilizadas anteriormente",
+            status_code=status.HTTP_400_BAD_REQUEST
+        )
+
+class RateLimitException(AuthException):
+    def __init__(self, message: str = "Demasiados intentos. Por favor, espera antes de intentarlo nuevamente."):
+        super().__init__(
+            detail=message,
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS
+        )
+
+class InvalidPasswordException(AuthException):
+    def __init__(self, message: str = "La contraseña no cumple con los requisitos de seguridad"):
+        super().__init__(
+            detail=message,
             status_code=status.HTTP_400_BAD_REQUEST
         ) 

@@ -1,19 +1,26 @@
 from datetime import timedelta
 from typing import Any
+import hashlib
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
+from jose import jwt
 
-from src.auth import service, schemas, exceptions
+from src.auth import service, schemas, exceptions, models
 from src.database import get_db
+from src.config import get_settings
+from src.validators.password import validate_password
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/token")
 
 templates = Jinja2Templates(directory="src/templates")
+
+# Configuraciones
+settings = get_settings()
 
 @router.post("/register", response_model=schemas.User, status_code=status.HTTP_201_CREATED)
 def register_user(user: schemas.UserCreate, db: Session = Depends(get_db)) -> Any:
@@ -75,22 +82,94 @@ def request_password_reset(
     reset_request: schemas.PasswordResetRequest,
     db: Session = Depends(get_db)
 ) -> Any:
-    service.request_password_reset(db, reset_request.email)
-    return {"message": "Si el correo existe, se ha enviado un enlace para restablecer la contraseña"}
+    """
+    Endpoint para solicitar el restablecimiento de contraseña.
+    Recibe un email y envía un enlace de restablecimiento si el usuario existe.
+    """
+    try:
+        service.request_password_reset(db, reset_request.email)
+        return {"message": "Si el correo existe, se ha enviado un enlace para restablecer la contraseña"}
+    except exceptions.RateLimitException as e:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=str(e)
+        )
 
 @router.get("/password-reset", response_class=HTMLResponse)
 def get_password_reset_form(request: Request, token: str) -> Any:
-    return templates.TemplateResponse("email/reset_password.html", {"request": request, "token": token})
+    """
+    Endpoint para mostrar el formulario de restablecimiento de contraseña.
+    Valida el token antes de mostrar el formulario.
+    """
+    try:
+        # Validar el token y obtener información para la respuesta
+        template_data = service.validate_password_reset_form_token(token)
+        
+        # Si el token es válido, mostrar el formulario
+        if "error" not in template_data:
+            return templates.TemplateResponse(
+                request,
+                "email/reset_password.html", 
+                {"token": token}
+            )
+        
+        # Si hay error, mostrar página de error
+        return templates.TemplateResponse(
+            request,
+            "email/reset_password_error.html", 
+            template_data
+        )
+    except jwt.ExpiredSignatureError:
+        return templates.TemplateResponse(
+            request,
+            "email/reset_password_error.html", 
+            {
+                "title": "Enlace invalido",
+                "message": "Este enlace de restablecimiento de contraseña ha expirado o ya fue usado. Por favor, solicita uno nuevo."
+            }
+        )
+    except jwt.JWTError:
+        return templates.TemplateResponse(
+            request,
+            "email/reset_password_error.html", 
+            {
+                "title": "Enlace inválido", 
+                "message": "Este enlace de restablecimiento de contraseña no es válido o ha sido modificado."
+            }
+        )
 
 @router.post("/password-reset")
-def reset_password(
-    reset_data: schemas.PasswordReset,
+async def reset_password(
+    request: Request,
     db: Session = Depends(get_db)
 ) -> Any:
+    """
+    Endpoint para restablecer la contraseña usando un token.
+    
+    Recibe:
+    - token: Token de restablecimiento de contraseña
+    - new_password: Nueva contraseña
+    
+    Realiza validaciones de longitud y seguridad de la contraseña.
+    """
     try:
-        service.reset_password(db, reset_data.token, reset_data.new_password)
+        body = await request.json()
+        
+        if "token" not in body or "new_password" not in body:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Falta el token o la nueva contraseña"
+            )
+            
+        token = body["token"]
+        new_password = body["new_password"]
+        
+        # Todas las validaciones de contraseña ahora están en service.reset_password
+        service.reset_password(db, token, new_password)
         return {"message": "Contraseña actualizada exitosamente"}
-    except (exceptions.InvalidTokenException, exceptions.TokenExpiredException, exceptions.PasswordHistoryException) as e:
+        
+    except (exceptions.InvalidTokenException, exceptions.TokenExpiredException, 
+            exceptions.PasswordHistoryException, exceptions.InvalidPasswordException) as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
