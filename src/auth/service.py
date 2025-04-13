@@ -182,6 +182,32 @@ def reset_password(db: Session, token: str, new_password: str) -> bool:
     except jwt.JWTError:
         raise exceptions.InvalidTokenException()
 
+def get_user_from_token(db: Session, token: str) -> models.User:
+    """
+    Valida un token y devuelve el usuario asociado.
+    Utilizado principalmente para el endpoint de refresco de tokens.
+    """
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        username: str = payload.get("sub")
+        token_type: str = payload.get("type", "")
+        
+        if username is None:
+            raise exceptions.InvalidTokenException()
+            
+        if token_type != "refresh":
+            raise exceptions.InvalidTokenException("Token inválido: se requiere un token de refresco")
+            
+        user = db.query(models.User).filter(models.User.username == username).first()
+        if user is None:
+            raise exceptions.UserNotFoundException()
+        
+        return user
+    except jwt.ExpiredSignatureError:
+        raise exceptions.TokenExpiredException()
+    except jwt.JWTError:
+        raise exceptions.InvalidTokenException()
+
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db)
