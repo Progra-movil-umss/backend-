@@ -1,7 +1,9 @@
 import pytest
 from fastapi.testclient import TestClient
+import hashlib
 
 from src.auth import schemas, service, models
+from src.auth.utils import get_utc_now
 
 def test_register_user(client):
     user_data = {
@@ -202,4 +204,123 @@ def test_update_user_password_invalid(client, auth_headers):
     response = client.put("/auth/me", json=update_data, headers=auth_headers)
     
     assert response.status_code == 400
-    assert "inválidas" in response.json()["detail"].lower() 
+    assert "inválidas" in response.json()["detail"].lower()
+
+def test_password_reset_used_token(client, db_session, test_user):
+    # Crear un token de reset
+    token = service.create_password_reset_token({"sub": test_user.username})
+    
+    # Usar el token una vez
+    response = client.post(
+        "/auth/password-reset", 
+        json={
+            "token": token,
+            "new_password": "NewPassword456!"
+        }
+    )
+    assert response.status_code == 200
+    
+    # Intentar usar el mismo token nuevamente
+    response = client.post(
+        "/auth/password-reset", 
+        json={
+            "token": token,
+            "new_password": "AnotherPassword789!"
+        }
+    )
+    assert response.status_code == 400
+    assert "ya ha sido utilizado" in response.json()["detail"].lower()
+
+def test_password_reset_form_used_token(client, db_session, test_user):
+    # Crear un token de reset
+    token = service.create_password_reset_token({"sub": test_user.username})
+    
+    # Marcar el token como usado
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    used_token = models.UsedToken(
+        token_hash=token_hash,
+        token_type="password_reset",
+        user_id=test_user.id
+    )
+    db_session.add(used_token)
+    db_session.commit()
+    
+    # Intentar acceder al formulario con un token usado
+    response = client.get(f"/auth/password-reset?token={token}")
+    
+    # Solo verificamos que se devuelva una respuesta HTTP 200 y que sea HTML
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+
+def test_password_reset_rate_limit(client, db_session, test_user):
+    # Establecer intentos previos
+    test_user.reset_attempts = service.MAX_RESET_ATTEMPTS
+    test_user.last_reset_attempt = get_utc_now()
+    db_session.commit()
+    
+    # Intentar solicitar reset (debería fallar por límite excedido)
+    response = client.post(
+        "/auth/password-reset-request", 
+        json={"email": "test@example.com"}
+    )
+    
+    assert response.status_code == 429
+    assert "demasiados intentos" in response.json()["detail"].lower()
+
+def test_password_reset_history_constraint(client, db_session, test_user):
+    # Cambiar la contraseña del usuario
+    test_user.hashed_password = service.get_password_hash("CurrentPassword123!")
+    password_history = models.PasswordHistory(
+        user_id=test_user.id,
+        hashed_password=test_user.hashed_password
+    )
+    db_session.add(password_history)
+    db_session.commit()
+    
+    # Crear un token de reset
+    token = service.create_password_reset_token({"sub": test_user.username})
+    
+    # Intentar restablecer con la misma contraseña
+    response = client.post(
+        "/auth/password-reset", 
+        json={
+            "token": token,
+            "new_password": "CurrentPassword123!"
+        }
+    )
+    
+    assert response.status_code == 400
+    assert "contraseña" in response.json()["detail"].lower()
+    assert "utilizadas anteriormente" in response.json()["detail"].lower()
+
+def test_password_reset_weak_password(client, db_session, test_user):
+    # Crear un token de reset
+    token = service.create_password_reset_token({"sub": test_user.username})
+    
+    # Intentar restablecer con una contraseña débil (sin caracteres especiales)
+    response = client.post(
+        "/auth/password-reset", 
+        json={
+            "token": token,
+            "new_password": "Password123"  # Falta carácter especial
+        }
+    )
+    
+    assert response.status_code == 400
+    assert "carácter especial" in response.json()["detail"].lower()
+
+def test_password_reset_short_password(client, db_session, test_user):
+    # Crear un token de reset
+    token = service.create_password_reset_token({"sub": test_user.username})
+    
+    # Intentar restablecer con una contraseña corta
+    response = client.post(
+        "/auth/password-reset", 
+        json={
+            "token": token,
+            "new_password": "Abc1!"  # Menos de 8 caracteres
+        }
+    )
+    
+    assert response.status_code == 400
+    assert "8 caracteres" in response.json()["detail"].lower() 

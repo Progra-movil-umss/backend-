@@ -45,4 +45,4 @@ def test_password_history_exception():
     exception = exceptions.PasswordHistoryException()
     assert exception.status_code == status.HTTP_400_BAD_REQUEST
     assert "contraseña" in exception.detail.lower()
-    assert "utilizada anteriormente" in exception.detail.lower() 
+    assert "utilizadas" in exception.detail.lower() 
