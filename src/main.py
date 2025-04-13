@@ -25,7 +25,6 @@ templates = Jinja2Templates(directory="templates")
 # Incluir routers
 app.include_router(auth_router)
 
-
 @app.get("/", response_class=HTMLResponse)
 def read_root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})

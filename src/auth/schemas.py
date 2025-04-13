@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, constr, validator
+from pydantic import BaseModel, EmailStr, constr, field_validator, ConfigDict
 from typing import Optional
 from datetime import datetime
 from uuid import UUID
@@ -13,7 +13,8 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     password: constr(min_length=8)
 
-    @validator('password')
+    @field_validator('password')
+    @classmethod
     def validate_password_strength(cls, v):
         is_valid, error_message = validate_password(v)
         if not is_valid:
@@ -27,7 +28,8 @@ class UserUpdate(BaseModel):
     current_password: Optional[constr(min_length=8)] = None
     new_password: Optional[constr(min_length=8)] = None
 
-    @validator('new_password')
+    @field_validator('new_password')
+    @classmethod
     def validate_new_password_strength(cls, v):
         if v is not None:
             is_valid, error_message = validate_password(v)
@@ -42,8 +44,7 @@ class User(UserBase):
     created_at: datetime
     updated_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class Token(BaseModel):
     access_token: str
@@ -64,7 +65,8 @@ class PasswordReset(BaseModel):
     token: str
     new_password: constr(min_length=8)
 
-    @validator('new_password')
+    @field_validator('new_password')
+    @classmethod
     def validate_new_password_strength(cls, v):
         is_valid, error_message = validate_password(v)
         if not is_valid:
