@@ -31,8 +31,17 @@ class Settings(BaseSettings):
     SENDER_EMAIL: str
     FRONTEND_URL: str = "http://localhost:8000"
 
-    PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = 15
-    PASSWORD_HISTORY_SIZE: int = 1
+    PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = 1
+    PASSWORD_HISTORY_SIZE: int = 5
+    
+    # PlantNet API
+    PLANTNET_API_URL: str
+    PLANTNET_API_KEY: str
+    PLANTNET_MAX_IMAGES: int
+    PLANTNET_MAX_IMAGE_SIZE: int
+    PLANTNET_INCLUDE_RELATED: bool
+    PLANTNET_LANGUAGE: str
+    PLANTNET_NB_RESULTS: int
     
     class Config:
         env_file = ".env"
