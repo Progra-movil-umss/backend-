@@ -10,14 +10,14 @@ from sqlalchemy.orm import Session
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 
-from src.auth import models, schemas, email, exceptions, utils
+from src.auth import models, schemas, emails, exceptions, utils
 from src.config import get_settings
 from src.database import get_db
 from src.validators.password import validate_password
 
 settings = get_settings()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-email_service = email.EmailService()
+email_service = emails.EmailService()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/token")
 
 MAX_RESET_ATTEMPTS = 4
