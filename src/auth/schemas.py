@@ -1,5 +1,5 @@
-from pydantic import BaseModel, EmailStr, constr, field_validator, ConfigDict
-from typing import Optional
+from pydantic import BaseModel, EmailStr, constr, field_validator, ConfigDict, model_validator
+from typing import Optional, Union
 from datetime import datetime
 from uuid import UUID
 
@@ -8,7 +8,6 @@ from src.validators.password import validate_password
 class UserBase(BaseModel):
     email: EmailStr
     username: constr(min_length=3, max_length=50)
-    full_name: Optional[str] = None
 
 class UserCreate(UserBase):
     password: constr(min_length=8)
@@ -24,7 +23,6 @@ class UserCreate(UserBase):
 class UserUpdate(BaseModel):
     email: Optional[EmailStr] = None
     username: Optional[constr(min_length=3, max_length=50)] = None
-    full_name: Optional[str] = None
     current_password: Optional[constr(min_length=8)] = None
     new_password: Optional[constr(min_length=8)] = None
 
@@ -55,7 +53,7 @@ class TokenData(BaseModel):
     username: Optional[str] = None
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    username_or_email: str
     password: str
 
 class PasswordResetRequest(BaseModel):

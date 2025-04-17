@@ -60,8 +60,12 @@ def create_password_reset_token(data: dict) -> str:
     return encoded_jwt
 
 
-def authenticate_user(db: Session, email: str, password: str) -> Optional[models.User]:
-    user = db.query(models.User).filter(models.User.email == email).first()
+def authenticate_user(db: Session, username_or_email: str, password: str) -> Optional[models.User]:
+    user = db.query(models.User).filter(
+        (models.User.email == username_or_email) | 
+        (models.User.username == username_or_email)
+    ).first()
+    
     if not user:
         return None
     if not verify_password(password, user.hashed_password):
@@ -80,8 +84,7 @@ def create_user(db: Session, user: schemas.UserCreate) -> models.User:
     db_user = models.User(
         email=user.email,
         username=user.username,
-        hashed_password=hashed_password,
-        full_name=user.full_name
+        hashed_password=hashed_password
     )
     db.add(db_user)
     db.commit()

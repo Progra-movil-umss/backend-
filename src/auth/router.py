@@ -36,7 +36,7 @@ def login_for_access_token(
     login_data: schemas.LoginRequest,
     db: Session = Depends(get_db)
 ) -> Any:
-    user = service.authenticate_user(db, login_data.email, login_data.password)
+    user = service.authenticate_user(db, login_data.username_or_email, login_data.password)
     if not user:
         raise exceptions.InvalidCredentialsException()
 
