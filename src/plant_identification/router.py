@@ -2,6 +2,7 @@ import os
 import logging
 from fastapi import APIRouter, UploadFile, HTTPException, status, File, Depends, BackgroundTasks
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from PIL import Image
 import io
 import aiofiles
@@ -16,17 +17,34 @@ from src.config import get_settings
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+security = HTTPBearer()
 
 
 class PlantNotFoundError(Exception):
     pass
 
-@router.post("/identify", tags=["plantas"])
+@router.post("/identify", 
+            tags=["plantas"],
+            summary="Identificar una planta usando imágenes",
+            description="Servicio de identificación de plantas usando imágenes. Requiere autenticación.",
+            responses={
+                200: {"description": "Identificación exitosa"},
+                400: {"description": "Parámetros inválidos"},
+                401: {"description": "No autorizado"},
+                403: {"description": "Usuario inactivo"}
+            })
 async def plant_identification_endpoint(
         images: List[UploadFile] = File(..., description="Imágenes de la planta (máximo 5 archivos JPG o PNG)"),
         current_user: User = Depends(get_current_user)
 ) -> Dict[str, Any]:
-
+    """
+    Identifica una planta utilizando una o más imágenes.
+    
+    - **images**: Lista de archivos de imagen (JPG/PNG)
+    - **current_user**: Usuario autenticado
+    
+    Requiere token de autenticación en el header "Authorization: Bearer {token}"
+    """
     try:
         settings = get_settings()
 
@@ -145,6 +163,6 @@ async def plant_identification_endpoint(
 
 async def identify_plant(
         images: List[UploadFile],
-        current_user: User
+        current_user: User = Depends(get_current_user)
 ) -> Dict[str, Any]:
     return await plant_identification_endpoint(images=images, current_user=current_user)

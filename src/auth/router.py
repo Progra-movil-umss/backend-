@@ -2,9 +2,9 @@ from datetime import timedelta
 from typing import Any
 import hashlib
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status, Security
 from fastapi.responses import HTMLResponse
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 from jose import jwt
@@ -15,11 +15,10 @@ from src.config import get_settings
 from src.validators.password import validate_password
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/token")
+security = HTTPBearer()
 
 templates = Jinja2Templates(directory="src/templates")
 
-# Configuraciones
 settings = get_settings()
 
 @router.post("/register", response_model=schemas.User, status_code=status.HTTP_201_CREATED)
@@ -175,13 +174,17 @@ async def reset_password(
             detail=str(e)
         )
 
-@router.get("/me", response_model=schemas.User)
+@router.get("/me", response_model=schemas.User, 
+            responses={401: {"description": "No autorizado"}},
+            summary="Obtener perfil de usuario actual")
 def read_users_me(
     current_user: schemas.User = Depends(service.get_current_user)
 ) -> Any:
     return current_user
 
-@router.put("/me", response_model=schemas.User)
+@router.put("/me", response_model=schemas.User,
+           responses={401: {"description": "No autorizado"}, 400: {"description": "Datos inválidos"}},
+           summary="Actualizar perfil de usuario")
 def update_user_me(
     user_update: schemas.UserUpdate,
     current_user: schemas.User = Depends(service.get_current_user),

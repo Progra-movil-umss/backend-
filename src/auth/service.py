@@ -8,7 +8,7 @@ from jose import jwt
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from src.auth import models, schemas, emails, exceptions, utils
 from src.config import get_settings
@@ -18,7 +18,7 @@ from src.validators.password import validate_password
 settings = get_settings()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 email_service = emails.EmailService()
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/token")
+security = HTTPBearer()
 
 MAX_RESET_ATTEMPTS = 4
 BASE_LOCKOUT_MINUTES = 5
@@ -493,7 +493,6 @@ def _update_user_password(db: Session, user: models.User, new_password: str, tok
 def get_user_from_token(db: Session, token: str) -> models.User:
     """
     Valida un token y devuelve el usuario asociado.
-    Utilizado principalmente para el endpoint de refresco de tokens.
     """
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
@@ -503,8 +502,8 @@ def get_user_from_token(db: Session, token: str) -> models.User:
         if username is None:
             raise exceptions.InvalidTokenException()
 
-        if token_type != "refresh":
-            raise exceptions.InvalidTokenException("Token inválido: se requiere un token de refresco")
+        if token_type not in ["refresh", "access"]:
+            raise exceptions.InvalidTokenException("Token inválido: se requiere un token de acceso o refresco")
 
         user = db.query(models.User).filter(models.User.username == username).first()
         if user is None:
@@ -518,10 +517,12 @@ def get_user_from_token(db: Session, token: str) -> models.User:
 
 
 async def get_current_user(
-        token: str = Depends(oauth2_scheme),
+        credentials: HTTPAuthorizationCredentials = Depends(security),
         db: Session = Depends(get_db)
 ) -> models.User:
     try:
+        token = credentials.credentials
+        
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         username: str = payload.get("sub")
         token_type: str = payload.get("type", "access")
@@ -536,6 +537,12 @@ async def get_current_user(
         raise exceptions.TokenExpiredException()
     except jwt.JWTError:
         raise exceptions.InvalidTokenException()
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(e),
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     user = db.query(models.User).filter(models.User.username == username).first()
     if user is None:

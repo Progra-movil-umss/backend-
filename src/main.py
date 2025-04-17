@@ -16,7 +16,7 @@ app = FastAPI(
     swagger_ui_parameters={"defaultModelsExpandDepth": -1},
 )
 
-# Configuración de CORS
+app.swagger_ui_init_oauth = {"usePkceWithAuthorizationCodeGrant": True}
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -25,11 +25,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-templates = Jinja2Templates(directory="templates")
-
-# Incluir routers
 app.include_router(auth_router)
 app.include_router(plant_router, prefix="/plants", tags=["plantas"])
+
+templates = Jinja2Templates(directory="templates")
+original_openapi = app.openapi
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    openapi_schema = original_openapi()
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+app.openapi = custom_openapi
 
 @app.get("/", response_class=HTMLResponse)
 def read_root(request: Request):
