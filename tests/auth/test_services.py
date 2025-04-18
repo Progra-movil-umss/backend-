@@ -1,17 +1,20 @@
 import pytest
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import jwt
 from sqlalchemy.orm import Session
 import hashlib
 import threading
 import concurrent.futures
 import time
+from unittest.mock import patch, MagicMock
+import uuid
+from typing import List, Dict
 
 from src.auth import service, schemas, models, exceptions
 from src.config import get_settings
 from src.auth.utils import get_utc_now
-from src.auth.service import MAX_RESET_ATTEMPTS
+from src.auth.service import MAX_RESET_ATTEMPTS, verify_password
 
 # Añadir configuración de asyncio para las pruebas
 pytest_plugins = ('pytest_asyncio',)
@@ -63,30 +66,27 @@ def test_create_password_reset_token():
     assert "exp" in payload
 
 def test_authenticate_user(db_session, test_user):
-    # Autenticación exitosa
-    authenticated_user = service.authenticate_user(
-        db_session, 
-        "test@example.com", 
-        "Test1234!"
-    )
-    assert authenticated_user is not None
-    assert authenticated_user.id == test_user.id
+    # Autenticación exitosa con email
+    user = service.authenticate_user(db_session, "test@example.com", "Test1234!")
+    assert user is not None
+    assert user.id == test_user.id
     
-    # Autenticación fallida - email incorrecto
-    non_user = service.authenticate_user(
-        db_session, 
-        "wrong@example.com", 
-        "Test1234!"
-    )
-    assert non_user is None
+    # Autenticación exitosa con username
+    user = service.authenticate_user(db_session, "testuser", "Test1234!")
+    assert user is not None
+    assert user.id == test_user.id
     
-    # Autenticación fallida - contraseña incorrecta
-    wrong_pass_user = service.authenticate_user(
-        db_session, 
-        "test@example.com", 
-        "WrongPassword123!"
-    )
-    assert wrong_pass_user is None
+    # Email incorrecto
+    user = service.authenticate_user(db_session, "wrong@example.com", "Test1234!")
+    assert user is None
+    
+    # Username incorrecto
+    user = service.authenticate_user(db_session, "wronguser", "Test1234!")
+    assert user is None
+    
+    # Contraseña incorrecta
+    user = service.authenticate_user(db_session, "test@example.com", "WrongPassword123!")
+    assert user is None
 
 def test_create_user(db_session):
     user_data = schemas.UserCreate(
@@ -95,21 +95,19 @@ def test_create_user(db_session):
         password="Test1234!"
     )
     
-    new_user = service.create_user(db_session, user_data)
+    user = service.create_user(db=db_session, user=user_data)
     
-    assert new_user.email == "newuser@example.com"
-    assert new_user.username == "newuser"
-    assert new_user.hashed_password != "Test1234!"
-    assert new_user.is_active is True
-    assert new_user.is_superuser is False
+    assert user.email == user_data.email
+    assert user.username == user_data.username
+    assert verify_password(user_data.password, user.hashed_password)
+    assert user.is_active is True
+    assert user.is_superuser is False
     
-    # Verificar que el historial de contraseñas también se guarda
+    # Verificar que se agregó al historial de contraseñas
     password_history = db_session.query(models.PasswordHistory).filter(
-        models.PasswordHistory.user_id == new_user.id
-    ).first()
-    
-    assert password_history is not None
-    assert password_history.hashed_password == new_user.hashed_password
+        models.PasswordHistory.user_id == user.id
+    ).all()
+    assert len(password_history) == 1
 
 def test_create_duplicate_user(db_session, test_user):
     user_data = schemas.UserCreate(
@@ -132,16 +130,16 @@ def test_create_duplicate_user(db_session, test_user):
 
 def test_update_user(db_session, test_user):
     user_update = schemas.UserUpdate(
-        full_name="Test User Full Name"
+        username="updated_user"
     )
     
     updated_user = service.update_user(
-        db_session, 
-        user_id=test_user.id, 
+        db_session,
+        user_id=test_user.id,
         user_update=user_update
     )
     
-    assert updated_user.full_name == "Test User Full Name"
+    assert updated_user.username == "updated_user"
 
 def test_update_user_password(db_session, test_user):
     user_update = schemas.UserUpdate(
@@ -262,7 +260,6 @@ def test_reset_attempt_limits(db_session, test_user):
     assert test_user.reset_lockout_until is not None
     
     # Asegurar que ambas fechas tengan información de zona horaria para la comparación
-    from datetime import timezone
     lockout_time = test_user.reset_lockout_until
     if lockout_time.tzinfo is None:
         lockout_time = lockout_time.replace(tzinfo=timezone.utc)
@@ -297,7 +294,6 @@ def test_reset_attempts_counter_resets_after_time(db_session, test_user, monkeyp
     test_user.reset_attempts = 2
     
     # Guardar last_reset_attempt sin información de zona horaria
-    from datetime import timezone
     now = get_utc_now().replace(tzinfo=None)
     test_user.last_reset_attempt = now
     db_session.commit()

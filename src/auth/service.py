@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 import secrets
 import hashlib
 from uuid import UUID
@@ -520,11 +520,14 @@ def get_user_from_token(db: Session, token: str) -> models.User:
 
 
 async def get_current_user(
-        credentials: HTTPAuthorizationCredentials = Depends(security),
+        credentials: Union[HTTPAuthorizationCredentials, str] = Depends(security),
         db: Session = Depends(get_db)
 ) -> models.User:
     try:
-        token = credentials.credentials
+        if isinstance(credentials, str):
+            token = credentials
+        else:
+            token = credentials.credentials
         
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         username: str = payload.get("sub")
