@@ -50,7 +50,7 @@ class EmailService:
         )
 
     def send_password_reset_email(self, to_email: str, reset_token: str) -> bool:
-        reset_url = f"{settings.FRONTEND_URL}/auth/password-reset?token={reset_token}"
+        reset_url = f"https://{settings.URL}/auth/password-reset?token={reset_token}"
         template = self.env.get_template("password_reset.html")
         html_content = template.render(
             reset_url=reset_url,

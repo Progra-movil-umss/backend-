@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     SMTP_USERNAME: str
     SMTP_PASSWORD: str
     SENDER_EMAIL: str
-    FRONTEND_URL: str = "http://localhost:8000"
+    URL: str
 
     PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = 1
     PASSWORD_HISTORY_SIZE: int = 5
