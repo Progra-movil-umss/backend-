@@ -16,7 +16,6 @@ app = FastAPI(
     swagger_ui_parameters={"defaultModelsExpandDepth": -1},
 )
 
-app.swagger_ui_init_oauth = {"usePkceWithAuthorizationCodeGrant": True}
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -24,6 +23,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.swagger_ui_init_oauth = {"usePkceWithAuthorizationCodeGrant": True}
 
 app.include_router(auth_router)
 app.include_router(plant_router, prefix="/plants", tags=["plantas"])
