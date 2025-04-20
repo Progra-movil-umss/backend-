@@ -255,7 +255,7 @@ def _create_new_reset_token(db: Session, user: models.User) -> str:
     invalidate_previous_tokens(db, user.id, "password_reset")
 
     # Crear nuevo token
-    reset_token = create_password_reset_token({"sub": user.username})
+    reset_token = create_password_reset_token({"sub": str(user.id)})
     db.commit()
 
     return reset_token
@@ -392,11 +392,11 @@ def _validate_reset_token(db: Session, token: str) -> models.User:
     if payload.get("type") != "password_reset":
         raise exceptions.InvalidTokenException()
 
-    username: str = payload.get("sub")
-    if username is None:
+    user_id: str = payload.get("sub")
+    if user_id is None:
         raise exceptions.InvalidTokenException()
 
-    user = db.query(models.User).filter(models.User.username == username).first()
+    user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise exceptions.UserNotFoundException()
 
@@ -499,16 +499,16 @@ def get_user_from_token(db: Session, token: str) -> models.User:
     """
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        username: str = payload.get("sub")
+        user_id: str = payload.get("sub")
         token_type: str = payload.get("type", "")
 
-        if username is None:
+        if user_id is None:
             raise exceptions.InvalidTokenException()
 
         if token_type not in ["refresh", "access"]:
             raise exceptions.InvalidTokenException("Token inválido: se requiere un token de acceso o refresco")
 
-        user = db.query(models.User).filter(models.User.username == username).first()
+        user = db.query(models.User).filter(models.User.id == user_id).first()
         if user is None:
             raise exceptions.UserNotFoundException()
 
@@ -527,10 +527,10 @@ async def get_current_user(
         token = credentials.credentials
         
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        username: str = payload.get("sub")
+        user_id: str = payload.get("sub")
         token_type: str = payload.get("type", "access")
 
-        if username is None:
+        if user_id is None:
             raise exceptions.InvalidCredentialsException()
 
         if token_type != "access":
@@ -547,7 +547,7 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    user = db.query(models.User).filter(models.User.username == username).first()
+    user = db.query(models.User).filter(models.User.id == user_id).first()
     if user is None:
         raise exceptions.UserNotFoundException()
 
@@ -577,15 +577,15 @@ def validate_password_reset_form_token(token: str) -> dict:
             }
 
         # Verificar que contenga información de usuario
-        username = payload.get("sub")
-        if username is None:
+        user_id = payload.get("sub")
+        if user_id is None:
             return {
                 "title": "Enlace inválido",
                 "message": "Este enlace de restablecimiento de contraseña no contiene información de usuario."
             }
 
         # Buscar el usuario
-        user = db.query(models.User).filter(models.User.username == username).first()
+        user = db.query(models.User).filter(models.User.id == user_id).first()
         if user is None:
             return {
                 "title": "Usuario no encontrado",

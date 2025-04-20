@@ -41,10 +41,10 @@ def login_for_access_token(
         raise exceptions.InvalidCredentialsException()
 
     access_token = service.create_access_token(
-        data={"sub": user.username}
+        data={"sub": str(user.id)}
     )
     refresh_token = service.create_refresh_token(
-        data={"sub": user.username}
+        data={"sub": str(user.id)}
     )
     return {
         "access_token": access_token,
@@ -60,10 +60,10 @@ def refresh_token(
     try:
         user = service.get_user_from_token(db, refresh_token)
         access_token = service.create_access_token(
-            data={"sub": user.username}
+            data={"sub": str(user.id)}
         )
         new_refresh_token = service.create_refresh_token(
-            data={"sub": user.username}
+            data={"sub": str(user.id)}
         )
         return {
             "access_token": access_token,
