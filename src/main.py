@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.security import OAuth2PasswordBearer
+import os
 
 from src.auth.router import router as auth_router
 from src.plant_identification.router import router as plant_router
@@ -29,7 +30,10 @@ app.swagger_ui_init_oauth = {"usePkceWithAuthorizationCodeGrant": True}
 app.include_router(auth_router)
 app.include_router(plant_router, prefix="/plants", tags=["plantas"])
 
-templates = Jinja2Templates(directory="templates")
+# Usar ruta absoluta para los templates
+templates_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates")
+templates = Jinja2Templates(directory=templates_path)
+
 original_openapi = app.openapi
 def custom_openapi():
     if app.openapi_schema:
