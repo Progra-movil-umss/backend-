@@ -5,12 +5,12 @@ from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
 from alembic import context
 
-# Agrega el directorio padre (con el paquete \`src\`) a la ruta de importación.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.config import get_settings
 from src.database import Base
-from src.auth import models  # Importa tus modelos
+
+import src.models  # Este import registra todos los modelos
 
 config = context.config
 

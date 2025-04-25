@@ -1,5 +1,6 @@
 from sqlalchemy import Column, DateTime
 from sqlalchemy.sql import func
+from sqlalchemy.orm import relationship
 
 from src.database import Base
 
@@ -8,8 +9,9 @@ class TimestampMixin:
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
 # Import all models to ensure they are registered with SQLAlchemy
-from src.auth.models import User
-from src.posts.models import Post
+from src.auth.models import User, PasswordHistory, UsedToken
+from src.gardens.models import Garden
+from src.plants.models import Plant, PlantInGarden
 
 # Update User model to include posts relationship
 User.posts = relationship("Post", back_populates="user") 
