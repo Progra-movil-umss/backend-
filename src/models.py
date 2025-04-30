@@ -11,7 +11,4 @@ class TimestampMixin:
 # Import all models to ensure they are registered with SQLAlchemy
 from src.auth.models import User, PasswordHistory, UsedToken
 from src.gardens.models import Garden
-from src.plants.models import Plant, PlantInGarden
-
-# Update User model to include posts relationship
-User.posts = relationship("Post", back_populates="user") 
+from src.plants.models import Plant

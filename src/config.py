@@ -1,5 +1,7 @@
 from pydantic_settings import BaseSettings
 from functools import lru_cache
+from typing import Optional, Dict, Any, List, Union
+from pydantic import PostgresDsn, validator, Field
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "FastAPI Project"
@@ -31,7 +33,7 @@ class Settings(BaseSettings):
     SENDER_EMAIL: str
     URL: str
 
-    PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = 1
+    PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = 30
     PASSWORD_HISTORY_SIZE: int = 5
     
     # PlantNet API
@@ -42,6 +44,14 @@ class Settings(BaseSettings):
     PLANTNET_INCLUDE_RELATED: bool
     PLANTNET_LANGUAGE: str
     PLANTNET_NB_RESULTS: int
+    
+    DO_SPACES_KEY: str
+    DO_SPACES_SECRET: str
+    DO_SPACES_ENDPOINT: str
+    DO_SPACES_CDN_ENDPOINT: Optional[str] = None
+    DO_SPACES_REGION: str
+    DO_SPACES_BUCKET: str
+    DO_SPACES_MAX_IMAGE_SIZE: int = 10 * 1024 * 1024  # 10MB default limit
     
     class Config:
         env_file = ".env"
