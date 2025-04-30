@@ -8,7 +8,6 @@ import os
 from src.auth.router import router as auth_router
 from src.plant_identification.router import router as plant_router
 from src.gardens.router import router as garden_router
-from src.storage.router import router as storage_router
 from src.config import get_settings
 
 settings = get_settings()
