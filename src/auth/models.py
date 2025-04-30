@@ -28,6 +28,8 @@ class User(Base):
     reset_lockout_until = Column(DateTime(timezone=True), nullable=True)
 
     password_history = relationship("PasswordHistory", back_populates="user", cascade="all, delete-orphan")
+    gardens = relationship("Garden", back_populates="user", cascade="all, delete-orphan")
+    plants = relationship("Plant", back_populates="user", cascade="all, delete-orphan")
 
 
 class PasswordHistory(Base):
