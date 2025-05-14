@@ -1,10 +1,11 @@
 import uuid
 from datetime import datetime
 from uuid import UUID
+from typing import List
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, Integer
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, Integer, ARRAY
 from sqlalchemy.orm import relationship
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy.dialects.postgresql import UUID as PGUUID, ARRAY as PGARRAY
 from sqlalchemy import func
 
 from src.database import Base
@@ -19,6 +20,7 @@ class User(Base):
     hashed_password = Column(String, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     is_superuser = Column(Boolean, default=False, nullable=False)
+    device_tokens = Column(PGARRAY(String), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     
@@ -30,6 +32,7 @@ class User(Base):
     password_history = relationship("PasswordHistory", back_populates="user", cascade="all, delete-orphan")
     gardens = relationship("Garden", back_populates="user", cascade="all, delete-orphan")
     plants = relationship("Plant", back_populates="user", cascade="all, delete-orphan")
+    reminders = relationship("Reminder", back_populates="user", cascade="all, delete-orphan")
 
 
 class PasswordHistory(Base):

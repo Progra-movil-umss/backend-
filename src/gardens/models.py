@@ -20,4 +20,5 @@ class Garden(Base):
 
     # Relaciones
     user = relationship("User", back_populates="gardens")
-    plants = relationship("Plant", back_populates="garden", cascade="all, delete-orphan") 
+    plants = relationship("Plant", back_populates="garden", cascade="all, delete-orphan")
+    reminders = relationship("GardenReminder", back_populates="garden", cascade="all, delete-orphan") 

@@ -93,4 +93,8 @@ class PasswordHistoryException(AuthException):
         super().__init__(
             detail="Esta contraseña ya ha sido utilizada anteriormente",
             status_code=status.HTTP_400_BAD_REQUEST
-        ) 
+        )
+
+class ResourceNotFoundException(NotFoundError):
+    def __init__(self, detail: str = "Recurso no encontrado"):
+        super().__init__(detail=detail) 

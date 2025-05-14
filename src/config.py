@@ -53,6 +53,23 @@ class Settings(BaseSettings):
     DO_SPACES_BUCKET: str
     DO_SPACES_MAX_IMAGE_SIZE: int = 10 * 1024 * 1024  # 10MB default limit
     
+    # Configuración de correo electrónico
+    EMAIL_HOST: str = "smtp.gmail.com"
+    EMAIL_PORT: int = 465
+    EMAIL_USERNAME: str = "your-email@gmail.com"
+    EMAIL_PASSWORD: str = "your-app-password"
+    EMAIL_SENDER: str = "Flora Find <noreply@florafind.com>"
+    
+    # Configuración de Push Notifications (Expo)
+    EXPO_ACCESS_TOKEN: Optional[str] = None
+    
+    # URL base de la aplicación (para enlaces en correos)
+    BASE_URL: str = "https://florafind.com"
+    MOBILE_APP_URL: str = "florafind://"
+    
+    # Temporizador para verificación de recordatorios (minutos)
+    REMINDER_CHECK_INTERVAL: int = 15
+    
     class Config:
         env_file = ".env"
 

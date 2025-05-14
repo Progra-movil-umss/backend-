@@ -27,6 +27,7 @@ class Plant(Base):
     
     user = relationship("User", back_populates="plants")
     garden = relationship("Garden", back_populates="plants")
+    reminders = relationship("PlantReminder", back_populates="plant", cascade="all, delete-orphan")
     
     __table_args__ = (
         UniqueConstraint('user_id', 'alias', name='uk_user_plant_alias'),

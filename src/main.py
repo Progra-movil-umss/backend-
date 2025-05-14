@@ -8,6 +8,8 @@ import os
 from src.auth.router import router as auth_router
 from src.plant_identification.router import router as plant_router
 from src.gardens.router import router as garden_router
+from src.reminders.router import router as reminder_router
+from src.reminders.scheduler import reminder_scheduler
 from src.config import get_settings
 
 settings = get_settings()
@@ -34,6 +36,7 @@ app.swagger_ui_init_oauth = {"usePkceWithAuthorizationCodeGrant": True}
 app.include_router(auth_router)
 app.include_router(plant_router, prefix="/plants", tags=["plantas"])
 app.include_router(garden_router, prefix="/gardens", tags=["jardines"])
+app.include_router(reminder_router)
 
 # Usar ruta absoluta para los templates
 templates_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates")
@@ -52,3 +55,13 @@ app.openapi = custom_openapi
 @app.get("/", response_class=HTMLResponse)
 def read_root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
+
+@app.on_event("startup")
+async def startup_event():
+    """Evento que se ejecuta al iniciar la aplicación"""
+    reminder_scheduler.start()
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Evento que se ejecuta al detener la aplicación"""
+    reminder_scheduler.stop()
