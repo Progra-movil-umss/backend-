@@ -198,10 +198,6 @@ async def list_plants_endpoint(
 async def update_plant_endpoint(
         plant_id: UUID = Path(..., description="ID de la planta"),
         alias: Optional[str] = Form(None, description="Alias único para la planta"),
-        scientific_name_without_author: Optional[str] = Form(None, description="Nombre científico sin autor"),
-        genus: Optional[str] = Form(None, description="Género de la planta"),
-        family: Optional[str] = Form(None, description="Familia de la planta"),
-        common_names: Optional[str] = Form(None, description="Nombres comunes separados por comas"),
         image: Optional[UploadFile] = File(None, description="Nueva imagen para la planta (opcional)"),
         current_user: User = Depends(get_current_user),
         db: Session = Depends(get_db),
@@ -214,18 +210,6 @@ async def update_plant_endpoint(
         
         if alias is not None and alias.strip() != "":
             plant_update_data["alias"] = alias
-            
-        if scientific_name_without_author is not None and scientific_name_without_author.strip() != "":
-            plant_update_data["scientific_name_without_author"] = scientific_name_without_author
-            
-        if genus is not None and genus.strip() != "":
-            plant_update_data["genus"] = genus
-            
-        if family is not None and family.strip() != "":
-            plant_update_data["family"] = family
-            
-        if common_names is not None:
-            plant_update_data["common_names"] = [name.strip() for name in common_names.split(",") if name.strip()]
 
         clean_plant_data = PlantUpdate(**plant_update_data)
 
