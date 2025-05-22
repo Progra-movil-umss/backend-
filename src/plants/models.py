@@ -7,6 +7,7 @@ from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.sql import func
 
 from src.database import Base
+from src.notes.models import PlantNote
 
 
 class Plant(Base):
@@ -27,8 +28,9 @@ class Plant(Base):
     
     user = relationship("User", back_populates="plants")
     garden = relationship("Garden", back_populates="plants")
+    notes = relationship("PlantNote", back_populates="plant", cascade="all, delete-orphan")
     
     __table_args__ = (
         UniqueConstraint('user_id', 'alias', name='uk_user_plant_alias'),
         {"sqlite_autoincrement": True}
-    ) 
+    )

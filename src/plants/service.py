@@ -134,4 +134,4 @@ def delete_plant(db: Session, plant_id: UUID, user_id: UUID) -> None:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error al eliminar la planta: {str(e)}"
-        ) 
+        )

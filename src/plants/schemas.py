@@ -60,4 +60,4 @@ class PlantWithGardenResponse(PlantResponse):
 
 class PlantListResponse(BaseModel):
     items: List[PlantResponse]
-    total: int 
+    total: int
