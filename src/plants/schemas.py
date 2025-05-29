@@ -60,4 +60,12 @@ class PlantWithGardenResponse(PlantResponse):
 
 class PlantListResponse(BaseModel):
     items: List[PlantResponse]
-    total: int 
+    total: int
+
+
+class WikipediaInfo(BaseModel):
+    title: str
+    summary: str
+    url: str
+    images: List[str] = []
+    sections: Dict[str, str] = {} 
