@@ -7,7 +7,8 @@ from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.sql import func
 
 from src.database import Base
-from src.notes.models import PlantNote
+from src.auth.models import User
+from src.gardens.models import Garden
 
 
 class Plant(Base):
