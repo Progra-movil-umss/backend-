@@ -18,3 +18,4 @@ async def get_plant_wikipedia_info(
     Obtiene información detallada de una planta desde Wikipedia usando su nombre científico.
     """
     return service.get_wikipedia_info(scientific_name)
+
