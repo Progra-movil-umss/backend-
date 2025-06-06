@@ -1,14 +1,14 @@
-from datetime import datetime, timedelta
-from typing import Optional, Tuple
-import secrets
 import hashlib
+from datetime import datetime, timedelta
+from typing import Optional
 from uuid import UUID
 
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from sqlalchemy.exc import SQLAlchemyError
 
 from src.auth import models, schemas, emails, exceptions, utils
 from src.config import get_settings
@@ -61,45 +61,141 @@ def create_password_reset_token(data: dict) -> str:
 
 
 def authenticate_user(db: Session, username_or_email: str, password: str) -> Optional[models.User]:
+    # Validar que el usuario exista
     user = db.query(models.User).filter(
         (models.User.email == username_or_email) | 
         (models.User.username == username_or_email)
     ).first()
     
     if not user:
-        return None
+        raise HTTPException(
+            status_code=400,
+            detail="Credenciales inválidas"
+        )
+
+    # Validar contraseña
     if not verify_password(password, user.hashed_password):
-        return None
+        # Incrementar contador de intentos fallidos
+        user.login_attempts = (user.login_attempts or 0) + 1
+        user.last_login_attempt = datetime.now()
+        
+        # Si hay demasiados intentos, bloquear temporalmente
+        if user.login_attempts >= 5:
+            user.is_locked = True
+            user.locked_until = datetime.now() + timedelta(minutes=15)
+            db.commit()
+            raise HTTPException(
+                status_code=429,
+                detail="Demasiados intentos fallidos. Por favor, intente más tarde"
+            )
+        
+        db.commit()
+        raise HTTPException(
+            status_code=400,
+            detail="Credenciales inválidas"
+        )
+
+    # Si el usuario está bloqueado, verificar si ya puede intentar de nuevo
+    if user.is_locked:
+        if user.locked_until and user.locked_until > datetime.now():
+            raise HTTPException(
+                status_code=429,
+                detail="Cuenta bloqueada temporalmente. Por favor, intente más tarde"
+            )
+        # Desbloquear si ya pasó el tiempo
+        user.is_locked = False
+        user.locked_until = None
+
+    # Resetear contadores de intentos
+    user.login_attempts = 0
+    user.last_login_attempt = None
+    db.commit()
+    
     return user
 
 
 def create_user(db: Session, user: schemas.UserCreate) -> models.User:
-    db_user = db.query(models.User).filter(
-        (models.User.email == user.email) | (models.User.username == user.username)
-    ).first()
-    if db_user:
-        raise exceptions.UserAlreadyExistsException()
+    # Validar formato de email
+    if not user.email or "@" not in user.email:
+        raise HTTPException(
+            status_code=400,
+            detail="El formato del email no es válido"
+        )
 
-    hashed_password = get_password_hash(user.password)
-    db_user = models.User(
-        email=user.email,
-        username=user.username,
-        hashed_password=hashed_password
-    )
-    db.add(db_user)
-    db.commit()
-    db.refresh(db_user)
+    # Validar longitud del username
+    if len(user.username) < 3:
+        raise HTTPException(
+            status_code=400,
+            detail="El nombre de usuario debe tener al menos 3 caracteres"
+        )
+    if len(user.username) > 50:
+        raise HTTPException(
+            status_code=400,
+            detail="El nombre de usuario no puede tener más de 50 caracteres"
+        )
 
-    password_history = models.PasswordHistory(
-        user_id=db_user.id,
-        hashed_password=hashed_password
-    )
-    db.add(password_history)
-    db.commit()
+    # Validar contraseña
+    if len(user.password) < 8:
+        raise HTTPException(
+            status_code=400,
+            detail="La contraseña debe tener al menos 8 caracteres"
+        )
 
-    email_service.send_welcome_email(db_user.email, db_user.username)
+    # Verificar si el email ya existe
+    existing_email = db.query(models.User).filter(models.User.email == user.email).first()
+    if existing_email:
+        raise HTTPException(
+            status_code=409,
+            detail="El email ya está registrado por otro usuario"
+        )
 
-    return db_user
+    # Verificar si el username ya existe
+    existing_username = db.query(models.User).filter(models.User.username == user.username).first()
+    if existing_username:
+        raise HTTPException(
+            status_code=409,
+            detail="El nombre de usuario ya está en uso"
+        )
+
+    try:
+        # Crear el usuario
+        hashed_password = get_password_hash(user.password)
+        db_user = models.User(
+            email=user.email,
+            username=user.username,
+            hashed_password=hashed_password
+        )
+        db.add(db_user)
+        db.commit()
+        db.refresh(db_user)
+
+        # Registrar la contraseña en el historial
+        password_history = models.PasswordHistory(
+            user_id=db_user.id,
+            hashed_password=hashed_password
+        )
+        db.add(password_history)
+        db.commit()
+
+        # Enviar email de bienvenida
+        try:
+            email_service.send_welcome_email(db_user.email, db_user.username)
+        except Exception as email_error:
+            # No fallamos si el email no se puede enviar, solo lo registramos
+            print(f"Error al enviar email de bienvenida: {str(email_error)}")
+
+        return db_user
+    except SQLAlchemyError as e:
+        db.rollback()
+        if "duplicate key value violates unique constraint" in str(e):
+            raise HTTPException(
+                status_code=409,
+                detail="Ya existe un usuario con ese email o nombre de usuario"
+            )
+        raise HTTPException(
+            status_code=500,
+            detail="Error interno del servidor al crear el usuario"
+        )
 
 
 def update_user(
@@ -108,41 +204,81 @@ def update_user(
         user_update: schemas.UserUpdate,
         current_password: Optional[str] = None
 ) -> models.User:
-    db_user = db.query(models.User).filter(models.User.id == user_id).first()
-    if not db_user:
-        raise exceptions.UserNotFoundException()
+    # Obtener usuario
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail="Usuario no encontrado"
+        )
 
+    # Actualizar datos básicos
     update_data = user_update.model_dump(exclude_unset=True)
-
+    
+    # Si hay cambio de contraseña, validar y actualizar
     if "new_password" in update_data:
-        if not current_password or not verify_password(current_password, db_user.hashed_password):
-            raise exceptions.InvalidCredentialsException()
-
+        if not current_password:
+            raise HTTPException(
+                status_code=400,
+                detail="Se requiere la contraseña actual para cambiarla"
+            )
+            
+        if not verify_password(current_password, user.hashed_password):
+            raise HTTPException(
+                status_code=400,
+                detail="La contraseña actual es incorrecta"
+            )
+            
+        # Verificar que la nueva contraseña no esté en el historial
         hashed_new_password = get_password_hash(update_data["new_password"])
         recent_passwords = db.query(models.PasswordHistory).filter(
             models.PasswordHistory.user_id == user_id
-        ).order_by(models.PasswordHistory.created_at.desc()).limit(
-            settings.PASSWORD_HISTORY_SIZE
-        ).all()
+        ).order_by(models.PasswordHistory.created_at.desc()).limit(3).all()
 
         for old_password in recent_passwords:
             if verify_password(update_data["new_password"], old_password.hashed_password):
-                raise exceptions.PasswordHistoryException()
+                raise HTTPException(
+                    status_code=400,
+                    detail="La nueva contraseña no puede ser igual a una de las últimas 3 contraseñas utilizadas"
+                )
 
-        db_user.hashed_password = hashed_new_password
-        password_history = models.PasswordHistory(
-            user_id=user_id,
-            hashed_password=hashed_new_password
-        )
-        db.add(password_history)
+        # Actualizar contraseña
+        user.hashed_password = hashed_new_password
+        db.add(models.PasswordHistory(user_id=user_id, hashed_password=hashed_new_password))
         del update_data["new_password"]
 
-    for key, value in update_data.items():
-        setattr(db_user, key, value)
+    # Validar email único si se está actualizando
+    if "email" in update_data and update_data["email"] != user.email:
+        existing_user = db.query(models.User).filter(models.User.email == update_data["email"]).first()
+        if existing_user:
+            raise HTTPException(
+                status_code=400,
+                detail="El email ya está registrado por otro usuario"
+            )
 
-    db.commit()
-    db.refresh(db_user)
-    return db_user
+    # Validar username único si se está actualizando
+    if "username" in update_data and update_data["username"] != user.username:
+        existing_user = db.query(models.User).filter(models.User.username == update_data["username"]).first()
+        if existing_user:
+            raise HTTPException(
+                status_code=400,
+                detail="El nombre de usuario ya está en uso"
+            )
+
+    # Actualizar resto de campos
+    for key, value in update_data.items():
+        setattr(user, key, value)
+
+    try:
+        db.commit()
+        db.refresh(user)
+        return user
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail="Error al actualizar el perfil. Por favor, intente nuevamente"
+        )
 
 
 def delete_user(db: Session, user_id: int) -> bool:
@@ -167,7 +303,7 @@ def request_password_reset(db: Session, email: str) -> bool:
         bool: True si se envió el email correctamente, False si el usuario no existe
         
     Raises:
-        RateLimitException: Si se excede el límite de intentos de restablecimiento
+        RateLimitException: Sí se excede el límite de intentos de restablecimiento
     """
     user = db.query(models.User).filter(models.User.email == email).first()
     if not user:
@@ -192,7 +328,7 @@ def _check_reset_rate_limits(db: Session, user: models.User) -> None:
         user: Usuario que solicita el restablecimiento
         
     Raises:
-        RateLimitException: Si se excede el límite de intentos
+        RateLimitException: Sí se excede el límite de intentos
     """
     now = utils.get_utc_now()
 
@@ -316,7 +452,7 @@ def is_token_valid(db: Session, token: str, user_id: UUID, token_type: str) -> b
         else:
             estimated_iat = payload['iat']
 
-        # Buscar tokens de invalidación posteriores a la emisión de este token
+        # Buscar tokens de invalidación posterior a la emisión de este token
         invalidation_tokens = db.query(models.UsedToken).filter(
             models.UsedToken.user_id == user_id,
             models.UsedToken.token_type == f"invalidation_{token_type}",
@@ -326,8 +462,9 @@ def is_token_valid(db: Session, token: str, user_id: UUID, token_type: str) -> b
         if invalidation_tokens:
             return False
 
-    except Exception:
-        # Cualquier error en la verificación, asumimos que el token no es válido
+    except jwt.ExpiredSignatureError:
+        return False
+    except jwt.JWTError:
         return False
 
     return True
@@ -374,14 +511,14 @@ def reset_password(db: Session, token: str, new_password: str) -> bool:
 
 def _validate_reset_token(db: Session, token: str) -> models.User:
     """
-    Valida un token de restablecimiento y devuelve el usuario asociado.
+    Válida un token de restablecimiento y devuelve el usuario asociado.
     
     Args:
         db: Sesión de la base de datos
         token: Token de restablecimiento
         
     Returns:
-        models.User: Usuario asociado al token
+        models. User: Usuario asociado al token
         
     Raises:
         InvalidTokenException: Si el token no es válido o ya fue utilizado
@@ -415,7 +552,7 @@ def _validate_reset_token(db: Session, token: str) -> models.User:
 
 def _validate_password_requirements(new_password: str) -> None:
     """
-    Valida que la contraseña cumpla con los requisitos de seguridad.
+    Válida que la contraseña cumpla con los requisitos de seguridad.
     
     Args:
         new_password: Contraseña a validar
@@ -495,7 +632,7 @@ def _update_user_password(db: Session, user: models.User, new_password: str, tok
 
 def get_user_from_token(db: Session, token: str) -> models.User:
     """
-    Valida un token y devuelve el usuario asociado.
+    Válida un token y devuelve el usuario asociado.
     """
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
@@ -556,7 +693,7 @@ async def get_current_user(
 
 def validate_password_reset_form_token(token: str) -> dict:
     """
-    Valida un token para el formulario de restablecimiento de contraseña.
+    Válida un token para el formulario de restablecimiento de contraseña.
     
     Args:
         token: Token de restablecimiento
@@ -623,9 +760,4 @@ def validate_password_reset_form_token(token: str) -> dict:
         return {
             "title": "Enlace inválido",
             "message": "Este enlace de restablecimiento de contraseña no es válido o ha sido modificado."
-        }
-    except Exception as e:
-        return {
-            "title": "Error inesperado",
-            "message": "Ha ocurrido un error al procesar este enlace. Por favor, solicita uno nuevo."
         }
