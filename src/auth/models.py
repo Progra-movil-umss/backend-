@@ -27,6 +27,11 @@ class User(Base):
     last_reset_attempt = Column(DateTime(timezone=True), nullable=True)
     reset_lockout_until = Column(DateTime(timezone=True), nullable=True)
 
+    # Campos para controlar los intentos fallidos de inicio de sesión y el bloqueo de la cuenta
+    is_locked = Column(Boolean, default=False, nullable=False)
+    failed_login_attempts = Column(Integer, default=0, nullable=False)
+    locked_until = Column(DateTime(timezone=True), nullable=True)
+
     password_history = relationship("PasswordHistory", back_populates="user", cascade="all, delete-orphan")
     gardens = relationship("Garden", back_populates="user", cascade="all, delete-orphan")
     plants = relationship("Plant", back_populates="user", cascade="all, delete-orphan")
