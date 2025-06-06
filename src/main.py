@@ -3,6 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.security import OAuth2PasswordBearer
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 import os
 
 from src.auth.router import router as auth_router
@@ -56,3 +58,16 @@ app.openapi = custom_openapi
 @app.get("/", response_class=HTMLResponse)
 def read_root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
+
+# Manejador de errores de validación
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    from src.auth.schemas import ValidationError
+    return JSONResponse(
+        status_code=422,
+        content=ValidationError(
+            status_code=422,
+            message="Error de validación",
+            detail=exc.errors()
+        ).model_dump()
+    )
