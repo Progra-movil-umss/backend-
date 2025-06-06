@@ -53,8 +53,16 @@ class Settings(BaseSettings):
     DO_SPACES_BUCKET: str
     DO_SPACES_MAX_IMAGE_SIZE: int = 10 * 1024 * 1024  # 10MB default limit
     
+    # Configuración de intentos de inicio de sesión y bloqueo
+    MAX_LOGIN_ATTEMPTS: int = 5  # Número máximo de intentos fallidos antes de bloquear
+    ACCOUNT_LOCKOUT_MINUTES: int = 15  # Tiempo de bloqueo en minutos
+    
+    # Configuración de contraseñas
+    MIN_PASSWORD_LENGTH: int = 8
+    
     class Config:
         env_file = ".env"
+        case_sensitive = True
 
 @lru_cache()
 def get_settings():

@@ -2,13 +2,14 @@ import hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID
+from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import or_
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt
 from passlib.context import CryptContext
-from sqlalchemy.orm import Session
-from sqlalchemy.exc import SQLAlchemyError
 
 from src.auth import models, schemas, emails, exceptions, utils
 from src.config import get_settings
@@ -63,57 +64,72 @@ async def create_password_reset_token(data: dict | models.User) -> str:
     return encoded_jwt
 
 
-def authenticate_user(db: Session, username_or_email: str, password: str) -> Optional[models.User]:
-    # Validar que el usuario exista
+def authenticate_user(db: Session, username_or_email: str, password: str) -> models.User:
+    """
+    Autenticar usuario y manejar intentos de inicio de sesión.
+    """
+    # Buscar usuario por email o username
     user = db.query(models.User).filter(
-        (models.User.email == username_or_email) | 
-        (models.User.username == username_or_email)
+        or_(
+            models.User.email == username_or_email,
+            models.User.username == username_or_email
+        )
     ).first()
-    
+
     if not user:
         raise HTTPException(
-            status_code=400,
+            status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Credenciales inválidas"
         )
 
-    # Validar contraseña
+    # Verificar si la cuenta está bloqueada
+    if user.is_locked and user.locked_until and user.locked_until > datetime.now(timezone.utc):
+        remaining_time = user.locked_until - datetime.now(timezone.utc)
+        minutes = int(remaining_time.total_seconds() / 60)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Demasiados intentos fallidos. Por favor, intente nuevamente en {minutes} minutos"
+        )
+    elif user.is_locked and (not user.locked_until or user.locked_until <= datetime.now(timezone.utc)):
+        # Si el bloqueo expiró, desbloquear la cuenta
+        user.is_locked = False
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        db.commit()
+
+    # Verificar contraseña
     if not verify_password(password, user.hashed_password):
-        # Incrementar contador de intentos fallidos
-        user.login_attempts = (user.login_attempts or 0) + 1
-        user.last_login_attempt = datetime.now()
+        # Incrementar intentos fallidos de inicio de sesión
+        user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
         
-        # Si hay demasiados intentos, bloquear temporalmente
-        if user.login_attempts >= 5:
+        # Calcular tiempo de bloqueo incremental
+        if user.failed_login_attempts >= settings.MAX_LOGIN_ATTEMPTS:
+            # Tiempo base de bloqueo
+            lockout_minutes = settings.ACCOUNT_LOCKOUT_MINUTES
+            # Incrementar el tiempo por cada bloqueo adicional
+            additional_attempts = user.failed_login_attempts - settings.MAX_LOGIN_ATTEMPTS
+            lockout_minutes = lockout_minutes * (2 ** additional_attempts)  # Duplicar el tiempo por cada bloqueo adicional
+            
             user.is_locked = True
-            user.locked_until = datetime.now() + timedelta(minutes=15)
+            user.locked_until = datetime.now(timezone.utc) + timedelta(minutes=lockout_minutes)
             db.commit()
             raise HTTPException(
-                status_code=429,
-                detail="Demasiados intentos fallidos. Por favor, intente más tarde"
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"Demasiados intentos fallidos. Por favor, intente nuevamente en {lockout_minutes} minutos"
             )
         
         db.commit()
         raise HTTPException(
-            status_code=400,
+            status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Credenciales inválidas"
         )
 
-    # Si el usuario está bloqueado, verificar si ya puede intentar de nuevo
-    if user.is_locked:
-        if user.locked_until and user.locked_until > datetime.now():
-            raise HTTPException(
-                status_code=429,
-                detail="Cuenta bloqueada temporalmente. Por favor, intente más tarde"
-            )
-        # Desbloquear si ya pasó el tiempo
-        user.is_locked = False
-        user.locked_until = None
-
-    # Resetear contadores de intentos
-    user.login_attempts = 0
-    user.last_login_attempt = None
+    # Si la autenticación es exitosa, resetear los intentos
+    user.failed_login_attempts = 0
+    user.is_locked = False
+    user.locked_until = None
     db.commit()
-    
+
     return user
 
 
