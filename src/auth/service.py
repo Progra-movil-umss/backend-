@@ -302,6 +302,9 @@ async def request_password_reset(db: Session, email: str) -> bool:
     # Verificar límites de intentos
     _check_reset_rate_limits(db, user)
 
+    # Invalidar tokens de restablecimiento anteriores para este usuario
+    invalidate_previous_tokens(db, user.id, "password_reset")
+
     # Crear nuevo token
     token = await create_password_reset_token(user)
     
