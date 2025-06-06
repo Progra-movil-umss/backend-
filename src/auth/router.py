@@ -2,7 +2,7 @@ import hashlib
 from datetime import timedelta, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Form
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPBearer
 from fastapi.templating import Jinja2Templates
 from jose import jwt
@@ -102,9 +102,13 @@ def refresh_token(
 ) -> dict:
     # Validar que se proporcionó el token
     if not refresh_token_value:
-        raise HTTPException(
+        return JSONResponse(
             status_code=400,
-            detail="Token de refresco no proporcionado"
+            content={
+                "status_code": 400,
+                "message": "Datos inválidos",
+                "detail": "Token de refresco no proporcionado"
+            }
         )
     # Decodificar y validar el token
     try:
@@ -116,26 +120,42 @@ def refresh_token(
         user_id = payload.get("sub")
         token_type = payload.get("type")
         if not user_id or token_type != "refresh":
-            raise HTTPException(
+            return JSONResponse(
                 status_code=401,
-                detail="Token de refresco inválido"
+                content={
+                    "status_code": 401,
+                    "message": "No autorizado",
+                    "detail": "Token de refresco inválido"
+                }
             )
     except jwt.ExpiredSignatureError:
-        raise HTTPException(
+        return JSONResponse(
             status_code=401,
-            detail="Token de refresco expirado"
+            content={
+                "status_code": 401,
+                "message": "No autorizado",
+                "detail": "Token de refresco expirado"
+            }
         )
     except jwt.JWTError:
-        raise HTTPException(
+        return JSONResponse(
             status_code=401,
-            detail="Token de refresco inválido"
+            content={
+                "status_code": 401,
+                "message": "No autorizado",
+                "detail": "Token de refresco inválido"
+            }
         )
     # Verificar que el usuario existe
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
-        raise HTTPException(
+        return JSONResponse(
             status_code=401,
-            detail="Usuario no encontrado"
+            content={
+                "status_code": 401,
+                "message": "No autorizado",
+                "detail": "Usuario no encontrado"
+            }
         )
     # Generar nuevos tokens
     new_access_token = service.create_access_token(data={"sub": str(user.id)})
