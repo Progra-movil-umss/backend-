@@ -70,14 +70,14 @@ def login_for_access_token(
         )
     # Generar tokens
     access_token = service.create_access_token(data={"sub": str(user.id)})
-    refresh_token_jwt = service.create_refresh_token(data={"sub": str(user.id)})
+    refresh_token = service.create_refresh_token(data={"sub": str(user.id)})
     return {
         "status_code": 200,
         "message": "Login exitoso",
         "data": {
             "access_token": access_token,
             "token_type": "bearer",
-            "refresh_token": refresh_token_jwt,
+            "refresh_token": refresh_token,
             "user": {
                 "id": str(user.id),
                 "email": user.email,
@@ -97,11 +97,11 @@ def login_for_access_token(
             },
             summary="Refrescar token de acceso")
 def refresh_token(
-        refresh_token_value: str = Form(..., description="Token de refresco"),
+        refresh_token: str = Form(..., description="Token de refresco"),
         db: Session = Depends(get_db)
 ) -> dict:
     # Validar que se proporcionó el token
-    if not refresh_token_value:
+    if not refresh_token:
         return JSONResponse(
             status_code=400,
             content={
@@ -113,7 +113,7 @@ def refresh_token(
     # Decodificar y validar el token
     try:
         payload = jwt.decode(
-            refresh_token_value, 
+            refresh_token,
             settings.SECRET_KEY, 
             algorithms=[settings.ALGORITHM]
         )
