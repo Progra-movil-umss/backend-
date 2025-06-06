@@ -668,43 +668,53 @@ async def get_current_user(
     return user
 
 
-def validate_password_reset_form_token(token: str) -> dict:
+def validate_password_reset_form_token(db: Session, token: str) -> models.User:
     """
-    Válida un token para el formulario de restablecimiento de contraseña.
+    Válida un token para el formulario de restablecimiento de contraseña y devuelve el usuario.
     
     Args:
+        db: Sesión de la base de datos
         token: Token de restablecimiento
         
     Returns:
-        dict: Datos para la plantilla, incluyendo mensajes de error si los hay
+        models.User: El usuario asociado al token si es válido.
+        
+    Raises:
+        HTTPException: Si el token no es válido por cualquier motivo.
     """
     try:
-        db = next(get_db())
-
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
 
         # Verificar que sea un token de restablecimiento de contraseña
         if payload.get("type") != "password_reset":
-            return {
-                "title": "Enlace inválido",
-                "message": "Este enlace de restablecimiento de contraseña no es válido."
-            }
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Este enlace de restablecimiento de contraseña no es válido."
+            )
 
         # Verificar que contenga información de usuario
-        user_id = payload.get("sub")
-        if user_id is None:
-            return {
-                "title": "Enlace inválido",
-                "message": "Este enlace de restablecimiento de contraseña no contiene información de usuario."
-            }
+        user_id_str = payload.get("sub") # Obtener como string
+        if user_id_str is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Este enlace de restablecimiento de contraseña no contiene información de usuario."
+            )
+
+        try:
+            user_id = UUID(user_id_str) # Convertir a UUID
+        except ValueError:
+             raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Formato de ID de usuario inválido en el token."
+            )
 
         # Buscar el usuario
         user = db.query(models.User).filter(models.User.id == user_id).first()
         if user is None:
-            return {
-                "title": "Usuario no encontrado",
-                "message": "No se encontró ningún usuario asociado a este enlace."
-            }
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No se encontró ningún usuario asociado a este enlace."
+            )
 
         # Verificar si el token ya ha sido utilizado
         token_hash = hashlib.sha256(token.encode()).hexdigest()
@@ -713,28 +723,34 @@ def validate_password_reset_form_token(token: str) -> dict:
         ).first()
 
         if used_token:
-            return {
-                "title": "Enlace ya utilizado",
-                "message": "Este enlace ya ha sido utilizado para restablecer la contraseña. Por favor, solicita uno nuevo si necesitas cambiar tu contraseña."
-            }
+             raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Este enlace ya ha sido utilizado para restablecer la contraseña. Por favor, solicita uno nuevo si necesitas cambiar tu contraseña."
+            )
 
         # Verificar si ha sido invalidado por un token más reciente
         if not is_token_valid(db, token, user.id, "password_reset"):
-            return {
-                "title": "Enlace reemplazado",
-                "message": "Este enlace ya no es válido porque se ha solicitado uno más reciente. Por favor, utiliza el enlace más reciente que enviamos a tu correo."
-            }
+             raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Este enlace ya no es válido porque se ha solicitado uno más reciente. Por favor, utiliza el enlace más reciente que enviamos a tu correo."
+            )
 
-        # Token válido
-        return {}
+        # Token válido, devolver el usuario
+        return user
 
     except jwt.ExpiredSignatureError:
-        return {
-            "title": "Enlace expirado",
-            "message": "Este enlace de restablecimiento de contraseña ha expirado. Por favor, solicita uno nuevo."
-        }
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Este enlace de restablecimiento de contraseña ha expirado. Por favor, solicita uno nuevo."
+        )
     except jwt.JWTError:
-        return {
-            "title": "Enlace inválido",
-            "message": "Este enlace de restablecimiento de contraseña no es válido o ha sido modificado."
-        }
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Este enlace de restablecimiento de contraseña no es válido o ha sido modificado."
+        )
+    except Exception as e:
+        # Capturar cualquier otro error inesperado durante la validación
+         raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error interno al validar el token: {e}"
+        )
