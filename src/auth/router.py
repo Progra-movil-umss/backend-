@@ -3,7 +3,7 @@ from datetime import timedelta, datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Form
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.security import HTTPBearer
 from fastapi.templating import Jinja2Templates
 from jose import jwt
@@ -238,7 +238,7 @@ async def request_password_reset(
 @router.get("/password-reset",
             response_class=HTMLResponse,
             responses={
-                200: {"description": "Formulario de restablecimiento"},
+                200: {"description": "Formulario de restablecimiento o mensaje de error"},
                 400: {"model": schemas.ErrorResponse, "description": "Token inválido o expirado"},
                 401: {"model": schemas.ErrorResponse, "description": "No autorizado"}
             },
@@ -249,72 +249,46 @@ async def get_password_reset_form(
         db: Session = Depends(get_db)
 ) -> HTMLResponse:
     try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        user_id = payload.get("sub")
-        token_type = payload.get("type")
-        if not user_id or token_type != "password_reset":
-            return templates.TemplateResponse(
-                "email/reset_password_error.html",
-                {
-                    "request": request,
-                    "error_code": 400,
-                    "error_message": "Token inválido"
+        # Validar el token de restablecimiento
+        token_data = service.validate_password_reset_form_token(token=token, db=db)
+
+        # Si el token es válido, mostrar el formulario
+        return templates.TemplateResponse(
+            name="email/reset_password.html", 
+            context={
+                "request": request,
+                "token": token
                 }
             )
-    except jwt.ExpiredSignatureError:
+
+    except HTTPException as e:
+        # Si el token es inválido o expirado, mostrar la página de error
         return templates.TemplateResponse(
-            "email/reset_password_error.html",
-            {
+            name="email/password_reset_expired.html", # Usar la nueva plantilla de expirado
+            context={
                 "request": request,
-                "error_code": 400,
-                "error_message": "El enlace de restablecimiento ha expirado"
-            }
-        )
-    except jwt.JWTError:
+                "detail": e.detail # Pasar detalles si es necesario (opcional)
+                }, 
+            status_code=e.status_code
+            )
+    except Exception as e:
+        # Manejo de otros errores inesperados
+        print(f"Error inesperado al validar token: {e}")
         return templates.TemplateResponse(
-            "email/reset_password_error.html",
-            {
-                "request": request,
-                "error_code": 400,
-                "error_message": "Token inválido"
-            }
-        )
-    # Verificar que el usuario existe
-    user = db.query(models.User).filter(models.User.id == user_id).first()
-    if not user:
-        return templates.TemplateResponse(
-            "email/reset_password_error.html",
-            {
-                "request": request,
-                "error_code": 400,
-                "error_message": "Usuario no encontrado"
-            }
-        )
-    # Verificar si el token ya fue usado
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
-    used_token = db.query(models.UsedToken).filter(
-        models.UsedToken.token_hash == token_hash
-    ).first()
-    if used_token:
-        return templates.TemplateResponse(
-            "email/reset_password_error.html",
-            {
-                "request": request,
-                "error_code": 400,
-                "error_message": "Este enlace ya ha sido utilizado"
-            }
-        )
-    return templates.TemplateResponse(
-        "email/reset_password.html",
-        {"request": request, "token": token}
-    )
+             name="email/password_reset_expired.html", 
+             context={
+                 "request": request,
+                 "detail": "Error interno del servidor."
+                 }, 
+             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+             )
 
 
 @router.post("/password-reset",
-            response_model=schemas.PasswordResetResponse,
+            response_model=schemas.PasswordResetResponse, # Aunque redirigimos, mantenemos el modelo para la documentación
             responses={
-                200: {"description": "Contraseña actualizada exitosamente"},
-                400: {"model": schemas.ErrorResponse, "description": "Datos inválidos"},
+                200: {"description": "Redirección a página de éxito"},
+                400: {"description": "Redirección a página de error (token inválido/expirado)"},
                 422: {"description": "Error de validación", "model": schemas.ValidationError}
             },
             summary="Restablecer contraseña")
@@ -322,77 +296,32 @@ async def reset_password(
         token: str = Form(...),
         new_password: str = Form(...),
         db: Session = Depends(get_db)
-) -> dict:
+) -> RedirectResponse:
     try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        user_id = payload.get("sub")
-        token_type = payload.get("type")
-        if not user_id or token_type != "password_reset":
-            raise HTTPException(
-                status_code=400,
-                detail="Token inválido"
-            )
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(
-            status_code=400,
-            detail="El enlace de restablecimiento ha expirado"
-        )
-    except jwt.JWTError:
-        raise HTTPException(
-            status_code=400,
-            detail="Token inválido"
-        )
-    # Verificar que el usuario existe
-    user = db.query(models.User).filter(models.User.id == user_id).first()
-    if not user:
-        raise HTTPException(
-            status_code=400,
-            detail="Usuario no encontrado"
-        )
-    # Verificar si el token ya fue usado
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
-    used_token = db.query(models.UsedToken).filter(
-        models.UsedToken.token_hash == token_hash
-    ).first()
-    if used_token:
-        raise HTTPException(
-            status_code=400,
-            detail="Este enlace ya ha sido utilizado"
-        )
-    # Validar nueva contraseña
-    is_valid, error_message = validate_password(new_password)
-    if not is_valid:
-        raise HTTPException(
-            status_code=400,
-            detail=error_message
-        )
-    # Actualizar contraseña
-    hashed_password = get_password_hash(new_password)
-    user.hashed_password = hashed_password
-    # Registrar en historial
-    password_history = models.PasswordHistory(
-        user_id=user.id,
-        hashed_password=hashed_password
-    )
-    # Marcar token como usado
-    used_token = models.UsedToken(
-        token_hash=token_hash,
-        token_type="password_reset",
-        user_id=user.id
-    )
-    # Resetear contadores
-    user.reset_attempts = 0
-    user.reset_lockout_until = None
-    db.add(password_history)
-    db.add(used_token)
-    db.commit()
-    return {
-        "status_code": 200,
-        "message": "Contraseña actualizada exitosamente",
-        "data": {
-            "detail": "Tu contraseña ha sido actualizada correctamente"
-        }
-    }
+        # Validar el token y restablecer la contraseña
+        service.reset_password(token=token, new_password=new_password, db=db)
+
+        # Si todo es exitoso, redirigir a la página de éxito
+        return RedirectResponse(url="/auth/password-reset-success", status_code=status.HTTP_303_SEE_OTHER)
+
+    except HTTPException as e:
+        # Si hay un error (token inválido/expirado/usuario no encontrado), redirigir a la página de error
+        print(f"Error en reset_password: {e.detail}")
+        return RedirectResponse(url="/auth/password-reset-expired", status_code=status.HTTP_303_SEE_OTHER)
+    except Exception as e:
+        # Manejo de otros errores inesperados
+        print(f"Error inesperado al restablecer contraseña: {e}")
+        return RedirectResponse(url="/auth/password-reset-expired", status_code=status.HTTP_303_SEE_OTHER) # Redirigir a error genérico
+
+
+@router.get("/password-reset-success", response_class=HTMLResponse, summary="Página de éxito de restablecimiento")
+async def password_reset_success(request: Request):
+    return templates.TemplateResponse(name="email/password_reset_success.html", context={"request": request})
+
+
+@router.get("/password-reset-expired", response_class=HTMLResponse, summary="Página de enlace inválido/expirado")
+async def password_reset_expired(request: Request):
+    return templates.TemplateResponse(name="email/password_reset_expired.html", context={"request": request})
 
 
 @router.get("/me", 
