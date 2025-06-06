@@ -1,5 +1,5 @@
 import hashlib
-from datetime import timedelta, datetime
+from datetime import timedelta, datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Form
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -199,7 +199,7 @@ async def request_password_reset(
         )
     # Verificar intentos de restablecimiento
     if user.reset_attempts >= 3:
-        if user.reset_lockout_until and user.reset_lockout_until > datetime.now():
+        if user.reset_lockout_until and user.reset_lockout_until > datetime.now(timezone.utc):
             raise HTTPException(
                 status_code=429,
                 detail="Demasiados intentos. Por favor, intente más tarde"
@@ -221,7 +221,7 @@ async def request_password_reset(
     # Incrementar contador de intentos
     user.reset_attempts = (user.reset_attempts or 0) + 1
     if user.reset_attempts >= 3:
-        user.reset_lockout_until = datetime.now() + timedelta(minutes=15)
+        user.reset_lockout_until = datetime.now(timezone.utc) + timedelta(minutes=15)
     db.commit()
     return {
         "status_code": 200,
