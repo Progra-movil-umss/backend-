@@ -1,5 +1,5 @@
 import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID
 
@@ -52,8 +52,11 @@ def create_refresh_token(data: dict) -> str:
     return encoded_jwt
 
 
-def create_password_reset_token(data: dict) -> str:
-    to_encode = data.copy()
+async def create_password_reset_token(data: dict | models.User) -> str:
+    if isinstance(data, models.User):
+        to_encode = {"sub": str(data.id)}
+    else:
+        to_encode = data.copy()
     expire = utils.get_future_datetime(minutes=settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire, "type": "password_reset"})
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
@@ -291,89 +294,58 @@ def delete_user(db: Session, user_id: int) -> bool:
     return True
 
 
-def request_password_reset(db: Session, email: str) -> bool:
-    """
-    Solicita un restablecimiento de contraseña para un email.
-    
-    Args:
-        db: Sesión de la base de datos
-        email: Email del usuario que solicita el restablecimiento
-        
-    Returns:
-        bool: True si se envió el email correctamente, False si el usuario no existe
-        
-    Raises:
-        RateLimitException: Sí se excede el límite de intentos de restablecimiento
-    """
+async def request_password_reset(db: Session, email: str) -> bool:
     user = db.query(models.User).filter(models.User.email == email).first()
     if not user:
         return False
 
-    # Verificar límites de intentos y aplicar restricciones si es necesario
+    # Verificar límites de intentos
     _check_reset_rate_limits(db, user)
 
-    # Invalidar tokens anteriores y crear uno nuevo
-    reset_token = _create_new_reset_token(db, user)
+    # Crear nuevo token
+    token = await create_password_reset_token(user)
+    
+    # Enviar email
+    success = await _send_password_reset_email(email, token)
+    if not success:
+        return False
 
-    # Enviar email con el enlace de restablecimiento
-    return _send_password_reset_email(user.email, reset_token)
+    # Actualizar contadores
+    user.reset_attempts = (user.reset_attempts or 0) + 1
+    if user.reset_attempts >= 3:
+        user.reset_lockout_until = datetime.now(timezone.utc) + timedelta(minutes=15)
+    
+    db.commit()
+    return True
 
 
 def _check_reset_rate_limits(db: Session, user: models.User) -> None:
     """
-    Verifica los límites de intentos de restablecimiento de contraseña.
+    Verifica y aplica límites de intentos de restablecimiento de contraseña.
     
     Args:
         db: Sesión de la base de datos
         user: Usuario que solicita el restablecimiento
         
     Raises:
-        RateLimitException: Sí se excede el límite de intentos
+        HTTPException: Si se excede el límite de intentos
     """
-    now = utils.get_utc_now()
-
-    # Verificar si el usuario está en tiempo de espera
-    if user.reset_lockout_until and user.reset_lockout_until > now:
-        remaining_minutes = int((user.reset_lockout_until - now).total_seconds() / 60)
-        raise exceptions.RateLimitException(
-            f"Demasiados intentos de restablecimiento. Por favor, espera {remaining_minutes} minutos antes de intentarlo nuevamente."
-        )
-
-    # Actualizar contadores de intentos
-    if user.last_reset_attempt:
-        # Asegurarse que last_reset_attempt tenga información de zona horaria
-        last_attempt = user.last_reset_attempt
-        if last_attempt.tzinfo is None:
-            # Si la fecha no tiene zona horaria, asumimos que es UTC
-            from datetime import timezone
-            last_attempt = last_attempt.replace(tzinfo=timezone.utc)
-
-        if (now - last_attempt) < timedelta(hours=1):
-            # Menos de una hora desde el último intento, incrementar contador
-            user.reset_attempts += 1
-        else:
-            # Reiniciar contador si ha pasado más de una hora
-            user.reset_attempts = 1
-    else:
-        # Primer intento
-        user.reset_attempts = 1
-
-    user.last_reset_attempt = now
-
-    # Aplicar tiempo de espera si se exceden los intentos
-    if user.reset_attempts > MAX_RESET_ATTEMPTS:
-        # Calcular tiempo de espera progresivo (5, 10, 20, 40, 60 minutos)
-        lockout_minutes = min(
-            BASE_LOCKOUT_MINUTES * (2 ** (user.reset_attempts - MAX_RESET_ATTEMPTS - 1)),
-            MAX_LOCKOUT_MINUTES
-        )
-        user.reset_lockout_until = now + timedelta(minutes=lockout_minutes)
+    # Si no hay intentos previos, inicializar contador
+    if user.reset_attempts is None:
+        user.reset_attempts = 0
+    
+    # Si hay demasiados intentos y el bloqueo aún es válido
+    if user.reset_attempts >= 3:
+        if user.reset_lockout_until and user.reset_lockout_until > datetime.now(timezone.utc):
+            remaining_minutes = int((user.reset_lockout_until - datetime.now(timezone.utc)).total_seconds() / 60)
+            raise HTTPException(
+                status_code=429,
+                detail=f"Demasiados intentos. Por favor, espere {remaining_minutes} minutos antes de intentar nuevamente."
+            )
+        # Si el bloqueo expiró, resetear contadores
+        user.reset_attempts = 0
+        user.reset_lockout_until = None
         db.commit()
-        raise exceptions.RateLimitException(
-            f"Demasiados intentos de restablecimiento. Por favor, espera {lockout_minutes} minutos antes de intentarlo nuevamente."
-        )
-
-    db.commit()
 
 
 def _create_new_reset_token(db: Session, user: models.User) -> str:
@@ -397,7 +369,7 @@ def _create_new_reset_token(db: Session, user: models.User) -> str:
     return reset_token
 
 
-def _send_password_reset_email(to_email: str, reset_token: str) -> bool:
+async def _send_password_reset_email(to_email: str, reset_token: str) -> bool:
     """
     Envía un email con el enlace para restablecer la contraseña.
     
@@ -408,7 +380,12 @@ def _send_password_reset_email(to_email: str, reset_token: str) -> bool:
     Returns:
         bool: True si el email se envió correctamente, False en caso contrario
     """
-    return email_service.send_password_reset_email(to_email, reset_token)
+    try:
+        await email_service.send_password_reset_email(to_email, reset_token)
+        return True
+    except Exception as e:
+        print(f"Error al enviar email: {str(e)}")
+        return False
 
 
 def invalidate_previous_tokens(db: Session, user_id: UUID, token_type: str) -> None:

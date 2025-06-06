@@ -1,5 +1,6 @@
 import hashlib
 from datetime import timedelta, datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Form
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -17,7 +18,7 @@ from src.validators.password import validate_password
 router = APIRouter(prefix="/auth", tags=["auth"])
 security = HTTPBearer()
 
-templates = Jinja2Templates(directory="src/templates")
+templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
 
 settings = get_settings()
 
@@ -193,10 +194,13 @@ async def request_password_reset(
     # Verificar si el usuario existe
     user = db.query(models.User).filter(models.User.email == reset_request.email).first()
     if not user:
-        raise HTTPException(
-            status_code=400,
-            detail="No existe una cuenta con ese email"
-        )
+        return {
+            "status_code": 200,
+            "message": "Solicitud de restablecimiento enviada",
+            "data": {
+                "detail": "Si existe una cuenta con ese email, recibirás instrucciones para restablecer tu contraseña"
+            }
+        }
     # Verificar intentos de restablecimiento
     if user.reset_attempts >= 3:
         if user.reset_lockout_until and user.reset_lockout_until > datetime.now(timezone.utc):
@@ -208,10 +212,9 @@ async def request_password_reset(
         user.reset_attempts = 0
         user.reset_lockout_until = None
     # Generar y enviar token
-    token = service.create_password_reset_token(user)
-    reset_url = f"{request.base_url}auth/password-reset?token={token}"
+    token = await service.create_password_reset_token(user)
     try:
-        await email_service.send_password_reset_email(user.email, reset_url)
+        await email_service.send_password_reset_email(user.email, token)
     except Exception as e:
         print(f"Error al enviar email: {str(e)}")
         raise HTTPException(
@@ -250,13 +253,17 @@ async def get_password_reset_form(
         user_id = payload.get("sub")
         token_type = payload.get("type")
         if not user_id or token_type != "password_reset":
-            raise HTTPException(
-                status_code=400,
-                detail="Token inválido"
+            return templates.TemplateResponse(
+                "email/reset_password_error.html",
+                {
+                    "request": request,
+                    "error_code": 400,
+                    "error_message": "Token inválido"
+                }
             )
     except jwt.ExpiredSignatureError:
         return templates.TemplateResponse(
-            "error.html",
+            "email/reset_password_error.html",
             {
                 "request": request,
                 "error_code": 400,
@@ -265,7 +272,7 @@ async def get_password_reset_form(
         )
     except jwt.JWTError:
         return templates.TemplateResponse(
-            "error.html",
+            "email/reset_password_error.html",
             {
                 "request": request,
                 "error_code": 400,
@@ -276,7 +283,7 @@ async def get_password_reset_form(
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         return templates.TemplateResponse(
-            "error.html",
+            "email/reset_password_error.html",
             {
                 "request": request,
                 "error_code": 400,
@@ -290,7 +297,7 @@ async def get_password_reset_form(
     ).first()
     if used_token:
         return templates.TemplateResponse(
-            "error.html",
+            "email/reset_password_error.html",
             {
                 "request": request,
                 "error_code": 400,
@@ -298,7 +305,7 @@ async def get_password_reset_form(
             }
         )
     return templates.TemplateResponse(
-        "password_reset.html",
+        "email/reset_password.html",
         {"request": request, "token": token}
     )
 
