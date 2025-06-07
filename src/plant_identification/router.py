@@ -146,9 +146,10 @@ async def plant_identification_endpoint(
             )
 
     except PlantNotFoundError as e:
+        logger.error(f"Plant not found: {str(e)}")
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,
-            content={"detail": str(e), "results": []}
+            content={"detail": "The requested plant could not be found.", "results": []}
         )
 
     except HTTPException:
