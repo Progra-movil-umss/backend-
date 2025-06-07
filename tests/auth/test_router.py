@@ -4,6 +4,7 @@ import hashlib
 
 from src.auth import schemas, service, models
 from src.auth.utils import get_utc_now
+from src.auth.service import _create_secure_token_hash
 
 def test_register_user(client):
     user_data = {
@@ -236,7 +237,7 @@ def test_password_reset_form_used_token(client, db_session, test_user):
     token = service.create_password_reset_token({"sub": test_user.username})
     
     # Marcar el token como usado
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    token_hash = _create_secure_token_hash(token)
     used_token = models.UsedToken(
         token_hash=token_hash,
         token_type="password_reset",
