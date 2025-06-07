@@ -414,8 +414,14 @@ def invalidate_previous_tokens(db: Session, user_id: UUID, token_type: str) -> N
     Marca todos los tokens existentes del tipo especificado como utilizados para un usuario.
     Esto se usa para invalidar tokens anteriores cuando se emite uno nuevo.
     """
+    # Crear un identificador único para la invalidación
+    invalidation_data = f"invalidation_{token_type}_{user_id}_{utils.get_utc_now().isoformat()}"
+    
+    # Usar Blake2b seguro en lugar de SHA-256 simple
+    token_hash = _create_secure_token_hash(invalidation_data)
+    
     invalidation_token = models.UsedToken(
-        token_hash=f"invalidation_{token_type}_{user_id}_{utils.get_utc_now().isoformat()}",
+        token_hash=token_hash,
         token_type=f"invalidation_{token_type}",
         user_id=user_id
     )
@@ -428,7 +434,9 @@ def is_token_valid(db: Session, token: str, user_id: UUID, token_type: str) -> b
     Verifica si un token es válido: no ha sido utilizado y no ha sido invalidado por
     una solicitud posterior.
     """
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    # Usar Blake2b seguro para crear el hash del token
+    token_hash = _create_secure_token_hash(token)
+    
     used_token = db.query(models.UsedToken).filter(
         models.UsedToken.token_hash == token_hash
     ).first()
@@ -516,7 +524,7 @@ def _validate_reset_token(db: Session, token: str) -> models.User:
         token: Token de restablecimiento
         
     Returns:
-        models. User: Usuario asociado al token
+        models.User: Usuario asociado al token
         
     Raises:
         InvalidTokenException: Si el token no es válido o ya fue utilizado
@@ -535,8 +543,8 @@ def _validate_reset_token(db: Session, token: str) -> models.User:
     if not user:
         raise exceptions.UserNotFoundException()
 
-    # Verificar si el token ya ha sido utilizado
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    # Verificar si el token ya ha sido utilizado usando Blake2b seguro
+    token_hash = _create_secure_token_hash(token)
     used_token = db.query(models.UsedToken).filter(
         models.UsedToken.token_hash == token_hash
     ).first()
@@ -612,8 +620,8 @@ def _update_user_password(db: Session, user: models.User, new_password: str, tok
     )
     db.add(password_history)
 
-    # Marcar el token como utilizado
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    # Marcar el token como utilizado usando Blake2b seguro
+    token_hash = _create_secure_token_hash(token)
     used_token = models.UsedToken(
         token_hash=token_hash,
         token_type="password_reset",
@@ -737,8 +745,8 @@ def validate_password_reset_form_token(db: Session, token: str) -> models.User:
                 detail="No se encontró ningún usuario asociado a este enlace."
             )
 
-        # Verificar si el token ya ha sido utilizado
-        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        # Verificar si el token ya ha sido utilizado usando Blake2b seguro
+        token_hash = _create_secure_token_hash(token)
         used_token = db.query(models.UsedToken).filter(
             models.UsedToken.token_hash == token_hash
         ).first()
@@ -773,7 +781,7 @@ def validate_password_reset_form_token(db: Session, token: str) -> models.User:
         # Capturar cualquier otro error inesperado durante la validación
          raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error interno al validar el token: {e}"
+            detail="Error interno del servidor al validar el token de restablecimiento."
         )
 
 
