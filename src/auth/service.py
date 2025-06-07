@@ -5,6 +5,8 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import or_
+import secrets
+import hmac
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -773,3 +775,62 @@ def validate_password_reset_form_token(db: Session, token: str) -> models.User:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error interno al validar el token: {e}"
         )
+
+
+def _create_secure_token_hash(token: str) -> str:
+    """
+    Crea un hash seguro para tokens usando Blake2b con clave secreta.
+    Blake2b es más rápido y seguro que SHA-256 para identificadores únicos.
+    """
+    try:
+        # Usar Blake2b con la SECRET_KEY como clave
+        secret_key = settings.SECRET_KEY.encode('utf-8')[:64]  # Blake2b acepta hasta 64 bytes
+        token_bytes = token.encode('utf-8')
+        
+        # Blake2b con clave es criptográficamente seguro y rápido
+        return hashlib.blake2b(token_bytes, key=secret_key, digest_size=32).hexdigest()
+    except Exception:
+        # Fallback a HMAC-SHA256 si Blake2b no está disponible
+        secret_key = settings.SECRET_KEY.encode('utf-8')
+        token_bytes = token.encode('utf-8')
+        return hmac.new(secret_key, token_bytes, hashlib.sha256).hexdigest()
+
+
+def generate_password_reset_token(self, db: Session, email: str) -> str:
+    """
+    Generar token seguro para restablecer contraseña.
+    """
+    user = db.query(models.User).filter(models.User.email == email).first()
+    if not user:
+        raise exceptions.UserNotFoundException()
+
+    # Generar token aleatorio seguro
+    token = secrets.token_urlsafe(32)
+    
+    # Crear hash del token usando la función segura
+    token_hash = _create_secure_token_hash(token)
+    
+    # Guardar el hash del token en la base de datos
+    user.password_reset_token = token_hash
+    user.password_reset_token_expires = datetime.now(timezone.utc) + timedelta(minutes=settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES)
+    db.commit()
+    
+    return token
+
+
+def verify_password_reset_token(self, db: Session, token: str) -> models.User:
+    """
+    Verificar token de restablecimiento de contraseña.
+    """
+    # Crear hash del token usando la función segura
+    token_hash = _create_secure_token_hash(token)
+    
+    user = db.query(models.User).filter(
+        models.User.password_reset_token == token_hash,
+        models.User.password_reset_token_expires > datetime.now(timezone.utc)
+    ).first()
+    
+    if not user:
+        raise exceptions.InvalidTokenException()
+            
+    return user
