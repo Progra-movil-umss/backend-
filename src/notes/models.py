@@ -13,6 +13,7 @@ class PlantNote(Base):
     plant_id = Column(PGUUID(as_uuid=True), ForeignKey("plants.id", ondelete="CASCADE"), nullable=False)
     user_id = Column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     text = Column(String, nullable=False)
+    color = Column(String, nullable=True)
     observation_date = Column(DateTime(timezone=True), nullable=False, default=func.now())
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
