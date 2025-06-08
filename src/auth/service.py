@@ -135,7 +135,7 @@ def authenticate_user(db: Session, username_or_email: str, password: str) -> mod
     return user
 
 
-def create_user(db: Session, user: schemas.UserCreate) -> models.User:
+async def create_user(db: Session, user: schemas.UserCreate) -> models.User:
     # Validar formato de email
     if not user.email or "@" not in user.email:
         raise HTTPException(
@@ -200,7 +200,7 @@ def create_user(db: Session, user: schemas.UserCreate) -> models.User:
 
         # Enviar email de bienvenida
         try:
-            email_service.send_welcome_email(db_user.email, db_user.username)
+            await email_service.send_welcome_email(db_user.email, db_user.username)
         except Exception as email_error:
             # No fallamos si el email no se puede enviar, solo lo registramos
             print(f"Error al enviar email de bienvenida: {str(email_error)}")

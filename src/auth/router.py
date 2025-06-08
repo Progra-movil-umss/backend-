@@ -33,8 +33,8 @@ settings = get_settings()
             },
             status_code=status.HTTP_201_CREATED,
             summary="Registrar nuevo usuario")
-def register_user(user: schemas.UserCreate, db: Session = Depends(get_db)) -> dict:
-    created_user = service.create_user(db=db, user=user)
+async def register_user(user: schemas.UserCreate, db: Session = Depends(get_db)) -> dict:
+    created_user = await service.create_user(db=db, user=user)
     return {
         "status_code": 201,
         "message": "Usuario registrado exitosamente",
