@@ -47,7 +47,5 @@ def delete_plant_note(db: Session, note_id: UUID, user_id: UUID) -> None:
     note = db.query(PlantNote).filter(PlantNote.id == note_id).first()
     if not note:
         raise HTTPException(status_code=404, detail="Nota no encontrada")
-    if note.user_id != user_id:
-        raise HTTPException(status_code=403, detail="No tienes permiso para eliminar esta nota")
     db.delete(note)
     db.commit()
