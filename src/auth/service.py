@@ -1,14 +1,17 @@
-from datetime import datetime, timedelta
-from typing import Optional, Tuple
-import secrets
 import hashlib
+from datetime import datetime, timedelta, timezone
+from typing import Optional
 from uuid import UUID
-
-from jose import jwt
-from passlib.context import CryptContext
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import or_
+import secrets
+import hmac
+
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from jose import jwt
+from passlib.context import CryptContext
 
 from src.auth import models, schemas, emails, exceptions, utils
 from src.config import get_settings
@@ -52,54 +55,168 @@ def create_refresh_token(data: dict) -> str:
     return encoded_jwt
 
 
-def create_password_reset_token(data: dict) -> str:
-    to_encode = data.copy()
+async def create_password_reset_token(data: dict | models.User) -> str:
+    if isinstance(data, models.User):
+        to_encode = {"sub": str(data.id)}
+    else:
+        to_encode = data.copy()
     expire = utils.get_future_datetime(minutes=settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire, "type": "password_reset"})
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt
 
 
-def authenticate_user(db: Session, username_or_email: str, password: str) -> Optional[models.User]:
+def authenticate_user(db: Session, username_or_email: str, password: str) -> models.User:
+    """
+    Autenticar usuario y manejar intentos de inicio de sesión.
+    """
+    # Buscar usuario por email o username
     user = db.query(models.User).filter(
-        (models.User.email == username_or_email) | 
-        (models.User.username == username_or_email)
+        or_(
+            models.User.email == username_or_email,
+            models.User.username == username_or_email
+        )
     ).first()
-    
+
     if not user:
-        return None
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Credenciales inválidas"
+        )
+
+    # Verificar si la cuenta está bloqueada
+    if user.is_locked and user.locked_until and user.locked_until > datetime.now(timezone.utc):
+        remaining_time = user.locked_until - datetime.now(timezone.utc)
+        minutes = int(remaining_time.total_seconds() / 60)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Demasiados intentos fallidos. Por favor, intente nuevamente en {minutes} minutos"
+        )
+    elif user.is_locked and (not user.locked_until or user.locked_until <= datetime.now(timezone.utc)):
+        # Si el bloqueo expiró, desbloquear la cuenta
+        user.is_locked = False
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        db.commit()
+
+    # Verificar contraseña
     if not verify_password(password, user.hashed_password):
-        return None
+        # Incrementar intentos fallidos de inicio de sesión
+        user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
+        
+        # Calcular tiempo de bloqueo incremental
+        if user.failed_login_attempts >= settings.MAX_LOGIN_ATTEMPTS:
+            # Tiempo base de bloqueo
+            lockout_minutes = settings.ACCOUNT_LOCKOUT_MINUTES
+            # Incrementar el tiempo por cada bloqueo adicional
+            additional_attempts = user.failed_login_attempts - settings.MAX_LOGIN_ATTEMPTS
+            lockout_minutes = lockout_minutes * (2 ** additional_attempts)  # Duplicar el tiempo por cada bloqueo adicional
+            
+            user.is_locked = True
+            user.locked_until = datetime.now(timezone.utc) + timedelta(minutes=lockout_minutes)
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"Demasiados intentos fallidos. Por favor, intente nuevamente en {lockout_minutes} minutos"
+            )
+        
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Credenciales inválidas"
+        )
+
+    # Si la autenticación es exitosa, resetear los intentos
+    user.failed_login_attempts = 0
+    user.is_locked = False
+    user.locked_until = None
+    db.commit()
+
     return user
 
 
 def create_user(db: Session, user: schemas.UserCreate) -> models.User:
-    db_user = db.query(models.User).filter(
-        (models.User.email == user.email) | (models.User.username == user.username)
-    ).first()
-    if db_user:
-        raise exceptions.UserAlreadyExistsException()
+    # Validar formato de email
+    if not user.email or "@" not in user.email:
+        raise HTTPException(
+            status_code=400,
+            detail="El formato del email no es válido"
+        )
 
-    hashed_password = get_password_hash(user.password)
-    db_user = models.User(
-        email=user.email,
-        username=user.username,
-        hashed_password=hashed_password
-    )
-    db.add(db_user)
-    db.commit()
-    db.refresh(db_user)
+    # Validar longitud del username
+    if len(user.username) < 3:
+        raise HTTPException(
+            status_code=400,
+            detail="El nombre de usuario debe tener al menos 3 caracteres"
+        )
+    if len(user.username) > 50:
+        raise HTTPException(
+            status_code=400,
+            detail="El nombre de usuario no puede tener más de 50 caracteres"
+        )
 
-    password_history = models.PasswordHistory(
-        user_id=db_user.id,
-        hashed_password=hashed_password
-    )
-    db.add(password_history)
-    db.commit()
+    # Validar contraseña
+    if len(user.password) < 8:
+        raise HTTPException(
+            status_code=400,
+            detail="La contraseña debe tener al menos 8 caracteres"
+        )
 
-    email_service.send_welcome_email(db_user.email, db_user.username)
+    # Verificar si el email ya existe
+    existing_email = db.query(models.User).filter(models.User.email == user.email).first()
+    if existing_email:
+        raise HTTPException(
+            status_code=409,
+            detail="El email ya está registrado por otro usuario"
+        )
 
-    return db_user
+    # Verificar si el username ya existe
+    existing_username = db.query(models.User).filter(models.User.username == user.username).first()
+    if existing_username:
+        raise HTTPException(
+            status_code=409,
+            detail="El nombre de usuario ya está en uso"
+        )
+
+    try:
+        # Crear el usuario
+        hashed_password = get_password_hash(user.password)
+        db_user = models.User(
+            email=user.email,
+            username=user.username,
+            hashed_password=hashed_password
+        )
+        db.add(db_user)
+        db.commit()
+        db.refresh(db_user)
+
+        # Registrar la contraseña en el historial
+        password_history = models.PasswordHistory(
+            user_id=db_user.id,
+            hashed_password=hashed_password
+        )
+        db.add(password_history)
+        db.commit()
+
+        # Enviar email de bienvenida
+        try:
+            email_service.send_welcome_email(db_user.email, db_user.username)
+        except Exception as email_error:
+            # No fallamos si el email no se puede enviar, solo lo registramos
+            print(f"Error al enviar email de bienvenida: {str(email_error)}")
+
+        return db_user
+    except SQLAlchemyError as e:
+        db.rollback()
+        if "duplicate key value violates unique constraint" in str(e):
+            raise HTTPException(
+                status_code=409,
+                detail="Ya existe un usuario con ese email o nombre de usuario"
+            )
+        raise HTTPException(
+            status_code=500,
+            detail="Error interno del servidor al crear el usuario"
+        )
 
 
 def update_user(
@@ -108,41 +225,81 @@ def update_user(
         user_update: schemas.UserUpdate,
         current_password: Optional[str] = None
 ) -> models.User:
-    db_user = db.query(models.User).filter(models.User.id == user_id).first()
-    if not db_user:
-        raise exceptions.UserNotFoundException()
+    # Obtener usuario
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail="Usuario no encontrado"
+        )
 
+    # Actualizar datos básicos
     update_data = user_update.model_dump(exclude_unset=True)
-
+    
+    # Si hay cambio de contraseña, validar y actualizar
     if "new_password" in update_data:
-        if not current_password or not verify_password(current_password, db_user.hashed_password):
-            raise exceptions.InvalidCredentialsException()
-
+        if not current_password:
+            raise HTTPException(
+                status_code=400,
+                detail="Se requiere la contraseña actual para cambiarla"
+            )
+            
+        if not verify_password(current_password, user.hashed_password):
+            raise HTTPException(
+                status_code=400,
+                detail="La contraseña actual es incorrecta"
+            )
+            
+        # Verificar que la nueva contraseña no esté en el historial
         hashed_new_password = get_password_hash(update_data["new_password"])
         recent_passwords = db.query(models.PasswordHistory).filter(
             models.PasswordHistory.user_id == user_id
-        ).order_by(models.PasswordHistory.created_at.desc()).limit(
-            settings.PASSWORD_HISTORY_SIZE
-        ).all()
+        ).order_by(models.PasswordHistory.created_at.desc()).limit(3).all()
 
         for old_password in recent_passwords:
             if verify_password(update_data["new_password"], old_password.hashed_password):
-                raise exceptions.PasswordHistoryException()
+                raise HTTPException(
+                    status_code=400,
+                    detail="La nueva contraseña no puede ser igual a una de las últimas 3 contraseñas utilizadas"
+                )
 
-        db_user.hashed_password = hashed_new_password
-        password_history = models.PasswordHistory(
-            user_id=user_id,
-            hashed_password=hashed_new_password
-        )
-        db.add(password_history)
+        # Actualizar contraseña
+        user.hashed_password = hashed_new_password
+        db.add(models.PasswordHistory(user_id=user_id, hashed_password=hashed_new_password))
         del update_data["new_password"]
 
-    for key, value in update_data.items():
-        setattr(db_user, key, value)
+    # Validar email único si se está actualizando
+    if "email" in update_data and update_data["email"] != user.email:
+        existing_user = db.query(models.User).filter(models.User.email == update_data["email"]).first()
+        if existing_user:
+            raise HTTPException(
+                status_code=400,
+                detail="El email ya está registrado por otro usuario"
+            )
 
-    db.commit()
-    db.refresh(db_user)
-    return db_user
+    # Validar username único si se está actualizando
+    if "username" in update_data and update_data["username"] != user.username:
+        existing_user = db.query(models.User).filter(models.User.username == update_data["username"]).first()
+        if existing_user:
+            raise HTTPException(
+                status_code=400,
+                detail="El nombre de usuario ya está en uso"
+            )
+
+    # Actualizar resto de campos
+    for key, value in update_data.items():
+        setattr(user, key, value)
+
+    try:
+        db.commit()
+        db.refresh(user)
+        return user
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail="Error al actualizar el perfil. Por favor, intente nuevamente"
+        )
 
 
 def delete_user(db: Session, user_id: int) -> bool:
@@ -155,89 +312,61 @@ def delete_user(db: Session, user_id: int) -> bool:
     return True
 
 
-def request_password_reset(db: Session, email: str) -> bool:
-    """
-    Solicita un restablecimiento de contraseña para un email.
-    
-    Args:
-        db: Sesión de la base de datos
-        email: Email del usuario que solicita el restablecimiento
-        
-    Returns:
-        bool: True si se envió el email correctamente, False si el usuario no existe
-        
-    Raises:
-        RateLimitException: Si se excede el límite de intentos de restablecimiento
-    """
+async def request_password_reset(db: Session, email: str) -> bool:
     user = db.query(models.User).filter(models.User.email == email).first()
     if not user:
         return False
 
-    # Verificar límites de intentos y aplicar restricciones si es necesario
+    # Verificar límites de intentos
     _check_reset_rate_limits(db, user)
 
-    # Invalidar tokens anteriores y crear uno nuevo
-    reset_token = _create_new_reset_token(db, user)
+    # Invalidar tokens de restablecimiento anteriores para este usuario
+    invalidate_previous_tokens(db, user.id, "password_reset")
 
-    # Enviar email con el enlace de restablecimiento
-    return _send_password_reset_email(user.email, reset_token)
+    # Crear nuevo token
+    token = await create_password_reset_token(user)
+    
+    # Enviar email
+    success = await _send_password_reset_email(email, token)
+    if not success:
+        return False
+
+    # Actualizar contadores
+    user.reset_attempts = (user.reset_attempts or 0) + 1
+    if user.reset_attempts >= 3:
+        user.reset_lockout_until = datetime.now(timezone.utc) + timedelta(minutes=15)
+    
+    db.commit()
+    return True
 
 
 def _check_reset_rate_limits(db: Session, user: models.User) -> None:
     """
-    Verifica los límites de intentos de restablecimiento de contraseña.
+    Verifica y aplica límites de intentos de restablecimiento de contraseña.
     
     Args:
         db: Sesión de la base de datos
         user: Usuario que solicita el restablecimiento
         
     Raises:
-        RateLimitException: Si se excede el límite de intentos
+        HTTPException: Si se excede el límite de intentos
     """
-    now = utils.get_utc_now()
-
-    # Verificar si el usuario está en tiempo de espera
-    if user.reset_lockout_until and user.reset_lockout_until > now:
-        remaining_minutes = int((user.reset_lockout_until - now).total_seconds() / 60)
-        raise exceptions.RateLimitException(
-            f"Demasiados intentos de restablecimiento. Por favor, espera {remaining_minutes} minutos antes de intentarlo nuevamente."
-        )
-
-    # Actualizar contadores de intentos
-    if user.last_reset_attempt:
-        # Asegurarse que last_reset_attempt tenga información de zona horaria
-        last_attempt = user.last_reset_attempt
-        if last_attempt.tzinfo is None:
-            # Si la fecha no tiene zona horaria, asumimos que es UTC
-            from datetime import timezone
-            last_attempt = last_attempt.replace(tzinfo=timezone.utc)
-
-        if (now - last_attempt) < timedelta(hours=1):
-            # Menos de una hora desde el último intento, incrementar contador
-            user.reset_attempts += 1
-        else:
-            # Reiniciar contador si ha pasado más de una hora
-            user.reset_attempts = 1
-    else:
-        # Primer intento
-        user.reset_attempts = 1
-
-    user.last_reset_attempt = now
-
-    # Aplicar tiempo de espera si se exceden los intentos
-    if user.reset_attempts > MAX_RESET_ATTEMPTS:
-        # Calcular tiempo de espera progresivo (5, 10, 20, 40, 60 minutos)
-        lockout_minutes = min(
-            BASE_LOCKOUT_MINUTES * (2 ** (user.reset_attempts - MAX_RESET_ATTEMPTS - 1)),
-            MAX_LOCKOUT_MINUTES
-        )
-        user.reset_lockout_until = now + timedelta(minutes=lockout_minutes)
+    # Si no hay intentos previos, inicializar contador
+    if user.reset_attempts is None:
+        user.reset_attempts = 0
+    
+    # Si hay demasiados intentos y el bloqueo aún es válido
+    if user.reset_attempts >= 3:
+        if user.reset_lockout_until and user.reset_lockout_until > datetime.now(timezone.utc):
+            remaining_minutes = int((user.reset_lockout_until - datetime.now(timezone.utc)).total_seconds() / 60)
+            raise HTTPException(
+                status_code=429,
+                detail=f"Demasiados intentos. Por favor, espere {remaining_minutes} minutos antes de intentar nuevamente."
+            )
+        # Si el bloqueo expiró, resetear contadores
+        user.reset_attempts = 0
+        user.reset_lockout_until = None
         db.commit()
-        raise exceptions.RateLimitException(
-            f"Demasiados intentos de restablecimiento. Por favor, espera {lockout_minutes} minutos antes de intentarlo nuevamente."
-        )
-
-    db.commit()
 
 
 def _create_new_reset_token(db: Session, user: models.User) -> str:
@@ -261,7 +390,7 @@ def _create_new_reset_token(db: Session, user: models.User) -> str:
     return reset_token
 
 
-def _send_password_reset_email(to_email: str, reset_token: str) -> bool:
+async def _send_password_reset_email(to_email: str, reset_token: str) -> bool:
     """
     Envía un email con el enlace para restablecer la contraseña.
     
@@ -272,7 +401,12 @@ def _send_password_reset_email(to_email: str, reset_token: str) -> bool:
     Returns:
         bool: True si el email se envió correctamente, False en caso contrario
     """
-    return email_service.send_password_reset_email(to_email, reset_token)
+    try:
+        await email_service.send_password_reset_email(to_email, reset_token)
+        return True
+    except Exception as e:
+        print(f"Error al enviar email: {str(e)}")
+        return False
 
 
 def invalidate_previous_tokens(db: Session, user_id: UUID, token_type: str) -> None:
@@ -280,8 +414,14 @@ def invalidate_previous_tokens(db: Session, user_id: UUID, token_type: str) -> N
     Marca todos los tokens existentes del tipo especificado como utilizados para un usuario.
     Esto se usa para invalidar tokens anteriores cuando se emite uno nuevo.
     """
+    # Crear un identificador único para la invalidación
+    invalidation_data = f"invalidation_{token_type}_{user_id}_{utils.get_utc_now().isoformat()}"
+    
+    # Usar Blake2b seguro en lugar de SHA-256 simple
+    token_hash = _create_secure_token_hash(invalidation_data)
+    
     invalidation_token = models.UsedToken(
-        token_hash=f"invalidation_{token_type}_{user_id}_{utils.get_utc_now().isoformat()}",
+        token_hash=token_hash,
         token_type=f"invalidation_{token_type}",
         user_id=user_id
     )
@@ -294,7 +434,9 @@ def is_token_valid(db: Session, token: str, user_id: UUID, token_type: str) -> b
     Verifica si un token es válido: no ha sido utilizado y no ha sido invalidado por
     una solicitud posterior.
     """
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    # Usar Blake2b seguro para crear el hash del token
+    token_hash = _create_secure_token_hash(token)
+    
     used_token = db.query(models.UsedToken).filter(
         models.UsedToken.token_hash == token_hash
     ).first()
@@ -316,7 +458,7 @@ def is_token_valid(db: Session, token: str, user_id: UUID, token_type: str) -> b
         else:
             estimated_iat = payload['iat']
 
-        # Buscar tokens de invalidación posteriores a la emisión de este token
+        # Buscar tokens de invalidación posterior a la emisión de este token
         invalidation_tokens = db.query(models.UsedToken).filter(
             models.UsedToken.user_id == user_id,
             models.UsedToken.token_type == f"invalidation_{token_type}",
@@ -326,8 +468,9 @@ def is_token_valid(db: Session, token: str, user_id: UUID, token_type: str) -> b
         if invalidation_tokens:
             return False
 
-    except Exception:
-        # Cualquier error en la verificación, asumimos que el token no es válido
+    except jwt.ExpiredSignatureError:
+        return False
+    except jwt.JWTError:
         return False
 
     return True
@@ -374,7 +517,7 @@ def reset_password(db: Session, token: str, new_password: str) -> bool:
 
 def _validate_reset_token(db: Session, token: str) -> models.User:
     """
-    Valida un token de restablecimiento y devuelve el usuario asociado.
+    Válida un token de restablecimiento y devuelve el usuario asociado.
     
     Args:
         db: Sesión de la base de datos
@@ -400,8 +543,8 @@ def _validate_reset_token(db: Session, token: str) -> models.User:
     if not user:
         raise exceptions.UserNotFoundException()
 
-    # Verificar si el token ya ha sido utilizado
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    # Verificar si el token ya ha sido utilizado usando Blake2b seguro
+    token_hash = _create_secure_token_hash(token)
     used_token = db.query(models.UsedToken).filter(
         models.UsedToken.token_hash == token_hash
     ).first()
@@ -415,7 +558,7 @@ def _validate_reset_token(db: Session, token: str) -> models.User:
 
 def _validate_password_requirements(new_password: str) -> None:
     """
-    Valida que la contraseña cumpla con los requisitos de seguridad.
+    Válida que la contraseña cumpla con los requisitos de seguridad.
     
     Args:
         new_password: Contraseña a validar
@@ -477,8 +620,8 @@ def _update_user_password(db: Session, user: models.User, new_password: str, tok
     )
     db.add(password_history)
 
-    # Marcar el token como utilizado
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    # Marcar el token como utilizado usando Blake2b seguro
+    token_hash = _create_secure_token_hash(token)
     used_token = models.UsedToken(
         token_hash=token_hash,
         token_type="password_reset",
@@ -495,7 +638,7 @@ def _update_user_password(db: Session, user: models.User, new_password: str, tok
 
 def get_user_from_token(db: Session, token: str) -> models.User:
     """
-    Valida un token y devuelve el usuario asociado.
+    Válida un token y devuelve el usuario asociado.
     """
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
@@ -554,78 +697,148 @@ async def get_current_user(
     return user
 
 
-def validate_password_reset_form_token(token: str) -> dict:
+def validate_password_reset_form_token(db: Session, token: str) -> models.User:
     """
-    Valida un token para el formulario de restablecimiento de contraseña.
+    Válida un token para el formulario de restablecimiento de contraseña y devuelve el usuario.
     
     Args:
+        db: Sesión de la base de datos
         token: Token de restablecimiento
         
     Returns:
-        dict: Datos para la plantilla, incluyendo mensajes de error si los hay
+        models.User: El usuario asociado al token si es válido.
+        
+    Raises:
+        HTTPException: Si el token no es válido por cualquier motivo.
     """
     try:
-        db = next(get_db())
-
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
 
         # Verificar que sea un token de restablecimiento de contraseña
         if payload.get("type") != "password_reset":
-            return {
-                "title": "Enlace inválido",
-                "message": "Este enlace de restablecimiento de contraseña no es válido."
-            }
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Este enlace de restablecimiento de contraseña no es válido."
+            )
 
         # Verificar que contenga información de usuario
-        user_id = payload.get("sub")
-        if user_id is None:
-            return {
-                "title": "Enlace inválido",
-                "message": "Este enlace de restablecimiento de contraseña no contiene información de usuario."
-            }
+        user_id_str = payload.get("sub") # Obtener como string
+        if user_id_str is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Este enlace de restablecimiento de contraseña no contiene información de usuario."
+            )
+
+        try:
+            user_id = UUID(user_id_str) # Convertir a UUID
+        except ValueError:
+             raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Formato de ID de usuario inválido en el token."
+            )
 
         # Buscar el usuario
         user = db.query(models.User).filter(models.User.id == user_id).first()
         if user is None:
-            return {
-                "title": "Usuario no encontrado",
-                "message": "No se encontró ningún usuario asociado a este enlace."
-            }
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No se encontró ningún usuario asociado a este enlace."
+            )
 
-        # Verificar si el token ya ha sido utilizado
-        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        # Verificar si el token ya ha sido utilizado usando Blake2b seguro
+        token_hash = _create_secure_token_hash(token)
         used_token = db.query(models.UsedToken).filter(
             models.UsedToken.token_hash == token_hash
         ).first()
 
         if used_token:
-            return {
-                "title": "Enlace ya utilizado",
-                "message": "Este enlace ya ha sido utilizado para restablecer la contraseña. Por favor, solicita uno nuevo si necesitas cambiar tu contraseña."
-            }
+             raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Este enlace ya ha sido utilizado para restablecer la contraseña. Por favor, solicita uno nuevo si necesitas cambiar tu contraseña."
+            )
 
         # Verificar si ha sido invalidado por un token más reciente
         if not is_token_valid(db, token, user.id, "password_reset"):
-            return {
-                "title": "Enlace reemplazado",
-                "message": "Este enlace ya no es válido porque se ha solicitado uno más reciente. Por favor, utiliza el enlace más reciente que enviamos a tu correo."
-            }
+             raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Este enlace ya no es válido porque se ha solicitado uno más reciente. Por favor, utiliza el enlace más reciente que enviamos a tu correo."
+            )
 
-        # Token válido
-        return {}
+        # Token válido, devolver el usuario
+        return user
 
     except jwt.ExpiredSignatureError:
-        return {
-            "title": "Enlace expirado",
-            "message": "Este enlace de restablecimiento de contraseña ha expirado. Por favor, solicita uno nuevo."
-        }
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Este enlace de restablecimiento de contraseña ha expirado. Por favor, solicita uno nuevo."
+        )
     except jwt.JWTError:
-        return {
-            "title": "Enlace inválido",
-            "message": "Este enlace de restablecimiento de contraseña no es válido o ha sido modificado."
-        }
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Este enlace de restablecimiento de contraseña no es válido o ha sido modificado."
+        )
     except Exception as e:
-        return {
-            "title": "Error inesperado",
-            "message": "Ha ocurrido un error al procesar este enlace. Por favor, solicita uno nuevo."
-        }
+        # Capturar cualquier otro error inesperado durante la validación
+         raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error interno del servidor al validar el token de restablecimiento."
+        )
+
+
+def _create_secure_token_hash(token: str) -> str:
+    """
+    Crea un hash seguro para tokens usando Blake2b con clave secreta.
+    Blake2b es más rápido y seguro que SHA-256 para identificadores únicos.
+    """
+    try:
+        # Usar Blake2b con la SECRET_KEY como clave
+        secret_key = settings.SECRET_KEY.encode('utf-8')[:64]  # Blake2b acepta hasta 64 bytes
+        token_bytes = token.encode('utf-8')
+        
+        # Blake2b con clave es criptográficamente seguro y rápido
+        return hashlib.blake2b(token_bytes, key=secret_key, digest_size=32).hexdigest()
+    except Exception:
+        # Fallback a HMAC-SHA256 si Blake2b no está disponible
+        secret_key = settings.SECRET_KEY.encode('utf-8')
+        token_bytes = token.encode('utf-8')
+        return hmac.new(secret_key, token_bytes, hashlib.sha256).hexdigest()
+
+
+def generate_password_reset_token(self, db: Session, email: str) -> str:
+    """
+    Generar token seguro para restablecer contraseña.
+    """
+    user = db.query(models.User).filter(models.User.email == email).first()
+    if not user:
+        raise exceptions.UserNotFoundException()
+
+    # Generar token aleatorio seguro
+    token = secrets.token_urlsafe(32)
+    
+    # Crear hash del token usando la función segura
+    token_hash = _create_secure_token_hash(token)
+    
+    # Guardar el hash del token en la base de datos
+    user.password_reset_token = token_hash
+    user.password_reset_token_expires = datetime.now(timezone.utc) + timedelta(minutes=settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES)
+    db.commit()
+    
+    return token
+
+
+def verify_password_reset_token(self, db: Session, token: str) -> models.User:
+    """
+    Verificar token de restablecimiento de contraseña.
+    """
+    # Crear hash del token usando la función segura
+    token_hash = _create_secure_token_hash(token)
+    
+    user = db.query(models.User).filter(
+        models.User.password_reset_token == token_hash,
+        models.User.password_reset_token_expires > datetime.now(timezone.utc)
+    ).first()
+    
+    if not user:
+        raise exceptions.InvalidTokenException()
+            
+    return user

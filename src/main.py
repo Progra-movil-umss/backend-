@@ -3,13 +3,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.security import OAuth2PasswordBearer
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 import os
 
 from src.auth.router import router as auth_router
 from src.plant_identification.router import router as plant_router
 from src.gardens.router import router as garden_router
-from src.plants.router import router as plants_router
 from src.notes.router import router as notes_router
+from src.plants.router  import router as plantas
 from src.config import get_settings
 
 settings = get_settings()
@@ -36,8 +38,8 @@ app.swagger_ui_init_oauth = {"usePkceWithAuthorizationCodeGrant": True}
 app.include_router(auth_router)
 app.include_router(plant_router, prefix="/plants", tags=["plantas"])
 app.include_router(garden_router, prefix="/gardens", tags=["jardines"])
-app.include_router(plants_router, prefix="/plants", tags=["notas de plantas"])
 app.include_router(notes_router, prefix="/plants", tags=["notas de plantas"])
+app.include_router(plantas, prefix="/plants", tags=["plantas"])
 
 # Usar ruta absoluta para los templates
 templates_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates")
@@ -56,3 +58,16 @@ app.openapi = custom_openapi
 @app.get("/", response_class=HTMLResponse)
 def read_root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
+
+# Manejador de errores de validación
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    from src.auth.schemas import ValidationError
+    return JSONResponse(
+        status_code=422,
+        content=ValidationError(
+            status_code=422,
+            message="Error de validación",
+            detail=exc.errors()
+        ).model_dump()
+    )

@@ -1,4 +1,6 @@
 name: Add Issues to Projects
+permissions:
+  repository-projects: write
 on:
   issues:
     types: [ labeled ]

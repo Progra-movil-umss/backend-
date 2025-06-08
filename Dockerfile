@@ -9,10 +9,9 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements/prod.txt requirements/prod.txt
 COPY requirements/base.txt requirements/base.txt
 
-RUN pip install --no-cache-dir -r requirements/prod.txt
+RUN pip install --no-cache-dir -r requirements/base.txt
 
 COPY . /app/
 

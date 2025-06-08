@@ -11,7 +11,7 @@ import time
 from src.auth import service, schemas, models, exceptions
 from src.config import get_settings
 from src.auth.utils import get_utc_now
-from src.auth.service import MAX_RESET_ATTEMPTS
+from src.auth.service import MAX_RESET_ATTEMPTS, _create_secure_token_hash
 
 # Añadir configuración de asyncio para las pruebas
 pytest_plugins = ('pytest_asyncio',)
@@ -217,7 +217,7 @@ def test_token_is_marked_as_used(db_session, test_user):
     service.reset_password(db_session, token, "ResetPassword123!")
     
     # Verificar que el token está marcado como usado
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    token_hash = _create_secure_token_hash(token)
     used_token = db_session.query(models.UsedToken).filter(
         models.UsedToken.token_hash == token_hash
     ).first()
