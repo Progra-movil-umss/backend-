@@ -11,6 +11,7 @@ class PlantNote(Base):
 
     id = Column(PGUUID(as_uuid=True), primary_key=True, index=True, default=uuid.uuid4)
     plant_id = Column(PGUUID(as_uuid=True), ForeignKey("plants.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     text = Column(String, nullable=False)
     color = Column(String, nullable=True)
     observation_date = Column(DateTime(timezone=True), nullable=False, default=func.now())
