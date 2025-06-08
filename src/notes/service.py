@@ -21,6 +21,7 @@ def create_plant_note(db: Session, plant_id: UUID, note_data: PlantNoteCreate) -
     note = PlantNote(
         plant_id=plant_id,
         text=note_data.text.strip(),
+        color=note_data.color,
         observation_date=note_data.observation_date
     )
     db.add(note)
