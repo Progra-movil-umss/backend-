@@ -29,12 +29,16 @@ def create_plant_note(db: Session, plant_id: UUID, note_data: PlantNoteCreate) -
     db.refresh(note)
     return note
 
-def update_plant_note(db: Session, note_id: UUID, note_data: PlantNoteUpdate, user_id: UUID = None) -> PlantNote:
+def update_plant_note(db: Session, note_id: UUID, note_data: PlantNoteUpdate) -> PlantNote:
     note = db.query(PlantNote).filter(PlantNote.id == note_id).first()
     if not note:
         raise HTTPException(status_code=404, detail="Nota no encontrada")
-    if user_id is not None and hasattr(note, 'user_id') and note.user_id != user_id:
-        raise HTTPException(status_code=403, detail="No tienes permiso para editar esta nota")
+    
+    # Validar que el usuario tenga acceso a la planta
+    plant = db.query(Plant).filter(Plant.id == note.plant_id).first()
+    if not plant:
+        raise HTTPException(status_code=404, detail="Planta no encontrada")
+    
     for key, value in note_data.dict(exclude_unset=True).items():
         setattr(note, key, value)
     db.commit()
@@ -44,9 +48,15 @@ def update_plant_note(db: Session, note_id: UUID, note_data: PlantNoteUpdate, us
 def get_plant_notes(db: Session, plant_id: UUID) -> list[PlantNote]:
     return db.query(PlantNote).filter(PlantNote.plant_id == plant_id).order_by(PlantNote.observation_date.desc()).all()
 
-def delete_plant_note(db: Session, note_id: UUID, user_id: UUID) -> None:
+def delete_plant_note(db: Session, note_id: UUID) -> None:
     note = db.query(PlantNote).filter(PlantNote.id == note_id).first()
     if not note:
         raise HTTPException(status_code=404, detail="Nota no encontrada")
+    
+    # Validar que el usuario tenga acceso a la planta
+    plant = db.query(Plant).filter(Plant.id == note.plant_id).first()
+    if not plant:
+        raise HTTPException(status_code=404, detail="Planta no encontrada")
+    
     db.delete(note)
     db.commit()

@@ -28,6 +28,10 @@ def list_plant_notes(plant_id: UUID, db: Session = Depends(get_db)):
     return get_plant_notes(db, plant_id)
 
 
-@router.delete("/notes/{note_id}", status_code=status.HTTP_204_NO_CONTENT)
-def remove_plant_note(note_id: UUID, user_id: UUID, db: Session = Depends(get_db)):
-    delete_plant_note(db, note_id, user_id)
+@router.delete("/notes/{note_id}", status_code=status.HTTP_200_OK)
+def remove_plant_note(note_id: UUID, db: Session = Depends(get_db)):
+    delete_plant_note(db, note_id)
+    return {
+        "status_code": 200,
+        "message": "Nota eliminada exitosamente"
+    }
