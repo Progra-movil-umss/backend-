@@ -332,17 +332,18 @@ async def password_reset_expired(request: Request):
                 422: {"description": "Error de validación", "model": schemas.ValidationError}
             },
             summary="Obtener datos del usuario actual")
-async def get_me(current_user: dict = Depends(service.get_current_user)) -> dict:
+async def get_me(current_user: models.User = Depends(service.get_current_user)) -> dict:
     return {
         "status_code": 200,
         "message": "Datos del usuario obtenidos exitosamente",
         "data": {
-            "id": str(current_user["id"]),
-            "email": current_user["email"],
-            "username": current_user["username"],
-            "is_active": current_user["is_active"],
-            "created_at": current_user["created_at"],
-            "updated_at": current_user["updated_at"]
+            "id": str(current_user.id),
+            "email": current_user.email,
+            "username": current_user.username,
+            "is_active": current_user.is_active,
+            "is_superuser": current_user.is_superuser,
+            "created_at": current_user.created_at,
+            "updated_at": current_user.updated_at
         }
     }
 
